@@ -151,23 +151,27 @@ and boots the full stack.
 
 With `"pluginKadDiscovery": true` (in `messagingOverrides`, or in `kernelConf`
 for a kernel-only node) logos-delivery delegates kademlia service discovery to
-this module, which hosts it on `libp2p_module`. The same config file then also
-carries a top-level `libp2pConfig` object, the only key this module owns: it is
-stripped before the config reaches logos-delivery and handed to
-`libp2p_module`'s `createNode`. `bootstrapNodes` is mandatory there (an empty
-array for a seed node), in libp2p's `{peerId, addrs[]}` shape; `mountKad` and
-`mountServiceDiscovery` default to `true`, any other key passes through.
-[`conf/logos-dev.json`](conf/logos-dev.json) is the reference:
+this module, which hosts it on `libp2p_module`. The decision and the DHT
+bootstrap peers stay with logos-delivery: after `createNode` this module asks
+the node (`logosdelivery_get_discovery_requirements`) whether a plugin is
+expected and which peers its configuration resolved, presets included, so
+[`conf/logos-dev.json`](conf/logos-dev.json) needs nothing but the switch.
+Explicit peers go through the node's own key (`kad-bootstrap-node`, `/p2p/`
+multiaddrs).
+
+The one key this module owns in the config file is an optional top-level
+`libp2pConfig` object: it is stripped before the config reaches logos-delivery
+and merged over what the node answered as `libp2p_module`'s `createNode`
+options. `mountKad` and `mountServiceDiscovery` default to `true`; a
+`bootstrapNodes` given here (libp2p's `{peerId, addrs[]}` shape) replaces the
+node's list, an empty array makes a seed; any other key passes through.
 
 ```json
 {
-  "preset": "logos.dev",
-  "messagingOverrides": { "pluginKadDiscovery": true },
-  "libp2pConfig": {
-    "bootstrapNodes": [
-      { "peerId": "16Uiu2HAm…", "addrs": ["/dns4/delivery-01.do-ams3.logos.dev.status.im/tcp/30303"] }
-    ]
-  }
+  "entryLayer": "kernel",
+  "kernelConf": { "plugin-kad-discovery": true,
+                  "kad-bootstrap-node": ["/ip4/10.0.0.2/tcp/30303/p2p/16Uiu2HAm…"] },
+  "libp2pConfig": { "addrs": ["/ip4/0.0.0.0/tcp/45000"] }
 }
 ```
 
