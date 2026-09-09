@@ -147,6 +147,37 @@ and metrics keep working.
 The pre-layered flat shape (bare `WakuNodeConf` keys at top level) still parses
 and boots the full stack.
 
+#### Plugin-hosted discovery (`libp2pConfig`)
+
+With `"pluginKadDiscovery": true` (in `messagingOverrides`, or in `kernelConf`
+for a kernel-only node) logos-delivery delegates kademlia service discovery to
+this module, which hosts it on `libp2p_module`. The same config file then also
+carries a top-level `libp2pConfig` object, the only key this module owns: it is
+stripped before the config reaches logos-delivery and handed to
+`libp2p_module`'s `createNode`. `bootstrapNodes` is mandatory there (an empty
+array for a seed node), in libp2p's `{peerId, addrs[]}` shape; `mountKad` and
+`mountServiceDiscovery` default to `true`, any other key passes through.
+[`conf/logos-dev.json`](conf/logos-dev.json) is the reference:
+
+```json
+{
+  "preset": "logos.dev",
+  "messagingOverrides": { "pluginKadDiscovery": true },
+  "libp2pConfig": {
+    "bootstrapNodes": [
+      { "peerId": "16Uiu2HAm…", "addrs": ["/dns4/delivery-01.do-ams3.logos.dev.status.im/tcp/30303"] }
+    ]
+  }
+}
+```
+
+Only the first bootstrap peer is handed over: `libp2p_module` dials the set
+inside a fixed 10 s call budget, and two DNS-resolved peers exceed it. The
+plugin brings libp2p up on the first discovery call after `start`, so a bad
+bootstrap set surfaces there, not at `createNode`. Set `LD_DISCO_TRACE` to a
+file path to log every call across the plugin boundary; logos-core discards a
+module's stderr, so this file is the only view into it.
+
 ### Content Topics
 
 Content topics identify message channels for publishing and subscribing. Use a

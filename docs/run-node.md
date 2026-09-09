@@ -191,8 +191,9 @@ legacy flat shape. Unpinned listening ports are OS-assigned; the config pins
 the p2p ports to match the Docker port mappings.
 
 For the dev network, use [`conf/logos-dev.json`](../conf/logos-dev.json)
-(preset `logos.dev`). The full config grammar, including kernel-only nodes
-(`"entryLayer": "kernel"`), is documented in the
+(preset `logos.dev`, with discovery hosted on `libp2p_module`). The full config
+grammar, including kernel-only nodes (`"entryLayer": "kernel"`) and the
+`libp2pConfig` section, is documented in the
 [README](../README.md#node-configuration-createnode).
 
 The node is now connected to the `logos.test` network. See
