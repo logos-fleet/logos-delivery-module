@@ -147,33 +147,24 @@ and metrics keep working.
 The pre-layered flat shape (bare `WakuNodeConf` keys at top level) still parses
 and boots the full stack.
 
-#### Plugin-hosted discovery (`libp2pConfig`)
+#### Plugin-hosted discovery
 
 With `"pluginKadDiscovery": true` (in `messagingOverrides`, or in `kernelConf`
 for a kernel-only node) logos-delivery delegates kademlia service discovery to
-this module, which hosts it on `libp2p_module`. The decision and the DHT
-bootstrap peers stay with logos-delivery: after `createNode` this module asks
-the node (`logosdelivery_get_discovery_requirements`) whether a plugin is
-expected and which peers its configuration resolved, presets included, so
+this module, which hosts it on `libp2p_module`. The config is logos-delivery's
+alone and is forwarded as is. After `createNode` this module asks the node
+(`logosdelivery_get_discovery_requirements`) whether a plugin is expected and
+which DHT bootstrap peers its configuration resolved, presets included, and
+sets `libp2p_module` up from that answer: the node's peers as `bootstrapNodes`,
+`mountKad` and `mountServiceDiscovery` on. Explicit peers go through the
+node's own key (`kad-bootstrap-node`, `/p2p/` multiaddrs);
 [`conf/logos-dev.json`](conf/logos-dev.json) needs nothing but the switch.
-Explicit peers go through the node's own key (`kad-bootstrap-node`, `/p2p/`
-multiaddrs).
 
-The one key this module owns in the config file is an optional top-level
-`libp2pConfig` object: it is stripped before the config reaches logos-delivery
-and merged over what the node answered as `libp2p_module`'s `createNode`
-options. `mountKad` and `mountServiceDiscovery` default to `true`; a
-`bootstrapNodes` given here (libp2p's `{peerId, addrs[]}` shape) replaces the
-node's list, an empty array makes a seed; any other key passes through.
-
-```json
-{
-  "entryLayer": "kernel",
-  "kernelConf": { "plugin-kad-discovery": true,
-                  "kad-bootstrap-node": ["/ip4/10.0.0.2/tcp/30303/p2p/16Uiu2HAm…"] },
-  "libp2pConfig": { "addrs": ["/ip4/0.0.0.0/tcp/45000"] }
-}
-```
+`libp2p_module`'s remaining options (listen addresses, transport, key) come
+from its own channel, the `LIBP2P_MODULE_CONFIG` environment variable (inline
+JSON or a file path); the plugin overlays the node's answer on it rather than
+replacing it. Unset, libp2p listens on an ephemeral loopback port, which is
+fine for local runs and not reachable from outside.
 
 Only the first bootstrap peer is handed over: `libp2p_module` dials the set
 inside a fixed 10 s call budget, and two DNS-resolved peers exceed it. The
