@@ -18,14 +18,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace delivery {
 
-inline std::string base64Encode(const std::vector<uint8_t>& data) {
-    static const char* kAlphabet =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+// The one alphabet both directions agree on: base64Decode's lookup table is
+// built from it, so the two can never drift apart.
+inline constexpr std::string_view kBase64Alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+inline std::string base64Encode(const std::vector<uint8_t>& data) {
     std::string out;
     out.reserve(4 * ((data.size() + 2) / 3));
 
@@ -35,24 +38,24 @@ inline std::string base64Encode(const std::vector<uint8_t>& data) {
             (static_cast<uint32_t>(data[i]) << 16) |
             (static_cast<uint32_t>(data[i + 1]) << 8) |
             static_cast<uint32_t>(data[i + 2]);
-        out += kAlphabet[(chunk >> 18) & 0x3F];
-        out += kAlphabet[(chunk >> 12) & 0x3F];
-        out += kAlphabet[(chunk >> 6) & 0x3F];
-        out += kAlphabet[chunk & 0x3F];
+        out += kBase64Alphabet[(chunk >> 18) & 0x3F];
+        out += kBase64Alphabet[(chunk >> 12) & 0x3F];
+        out += kBase64Alphabet[(chunk >> 6) & 0x3F];
+        out += kBase64Alphabet[chunk & 0x3F];
     }
 
     const size_t remaining = data.size() - i;
     if (remaining == 1) {
         const uint32_t chunk = static_cast<uint32_t>(data[i]) << 16;
-        out += kAlphabet[(chunk >> 18) & 0x3F];
-        out += kAlphabet[(chunk >> 12) & 0x3F];
+        out += kBase64Alphabet[(chunk >> 18) & 0x3F];
+        out += kBase64Alphabet[(chunk >> 12) & 0x3F];
         out += "==";
     } else if (remaining == 2) {
         const uint32_t chunk = (static_cast<uint32_t>(data[i]) << 16) |
                                (static_cast<uint32_t>(data[i + 1]) << 8);
-        out += kAlphabet[(chunk >> 18) & 0x3F];
-        out += kAlphabet[(chunk >> 12) & 0x3F];
-        out += kAlphabet[(chunk >> 6) & 0x3F];
+        out += kBase64Alphabet[(chunk >> 18) & 0x3F];
+        out += kBase64Alphabet[(chunk >> 12) & 0x3F];
+        out += kBase64Alphabet[(chunk >> 6) & 0x3F];
         out += '=';
     }
 
@@ -64,10 +67,8 @@ inline std::vector<uint8_t> base64Decode(const std::string& encoded) {
     // the decode the way boost::beast's did.
     static const auto kReverse = [] {
         std::vector<int8_t> table(256, -1);
-        const std::string alphabet =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        for (size_t i = 0; i < alphabet.size(); ++i) {
-            table[static_cast<uint8_t>(alphabet[i])] = static_cast<int8_t>(i);
+        for (size_t i = 0; i < kBase64Alphabet.size(); ++i) {
+            table[static_cast<uint8_t>(kBase64Alphabet[i])] = static_cast<int8_t>(i);
         }
         return table;
     }();

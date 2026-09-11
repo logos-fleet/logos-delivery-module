@@ -162,9 +162,7 @@ let
       export ANDROID_COMPILER=${builtins.baseNameOf androidClangPath}
       export ANDROID_TOOLCHAIN_DIR=${androidToolchainDir}
       export ANDROID_ARCH=aarch64-linux-android
-    '' else ''
-      ${pkgs.logosNimCrossSetup}
-    '';
+    '' else pkgs.logosNimCrossSetup;
 
   # config.nims' default branch adds `-march=native` to passC AND passL for
   # anything that is not Windows, Android or macOS-on-arm64 -- and nim does not
@@ -249,6 +247,21 @@ let
   iosFlags = lib.optionalString (!isAndroid)
     "--target=${pkgs.logosIosTriple} -isysroot $(xcrun --sdk ${pkgs.logosIosAppleSdk} --show-sdk-path)";
 
+  # libnatpmp's gateway discovery, the one vendored source file whose compile
+  # differs by target.
+  natpmpGatewayCompile =
+    if isAndroid then ''
+      # bionic IS linux, so getgateway.c's /proc/net/route branch is the right
+      # one and NAT-PMP gateway discovery works.
+      "$CC" $CFLAGS_TARGET -I"$NATPMP" -DENABLE_STRNATPMPERR \
+        -c "$NATPMP/getgateway.c" -o objs/natpmp_getgateway.o
+    '' else ''
+      # No <net/route.h> in either iOS SDK, so getgateway.c cannot be built at
+      # all; logos-delivery ships the stub that returns failure.
+      "$CC" $CFLAGS_TARGET -c ${deliverySrc}/library/ios_natpmp_stubs.c \
+        -o objs/natpmp_getgateway_stub.o
+    '';
+
   # What miniupnpc puts in its UPnP User-Agent. The device, not the builder.
   uaOsString = if isAndroid then "Android/aarch64" else "iOS/aarch64";
   miniupnpcFiles = [
@@ -259,7 +272,7 @@ let
   ];
 
 in
-rec {
+{
   rln = rlnArchive;
 
   logosdelivery = mkTargetDrv {
@@ -308,17 +321,7 @@ rec {
       # --- libnatpmp ---
       "$CC" $CFLAGS_TARGET -I"$NATPMP" -DENABLE_STRNATPMPERR \
         -c "$NATPMP/natpmp.c" -o objs/natpmp_natpmp.o
-      ${if isAndroid then ''
-      # bionic IS linux, so getgateway.c's /proc/net/route branch is the right
-      # one and NAT-PMP gateway discovery works.
-      "$CC" $CFLAGS_TARGET -I"$NATPMP" -DENABLE_STRNATPMPERR \
-        -c "$NATPMP/getgateway.c" -o objs/natpmp_getgateway.o
-      '' else ''
-      # No <net/route.h> in either iOS SDK, so getgateway.c cannot be built at
-      # all; logos-delivery ships the stub that returns failure.
-      "$CC" $CFLAGS_TARGET -c ${deliverySrc}/library/ios_natpmp_stubs.c \
-        -o objs/natpmp_getgateway_stub.o
-      ''}
+      ${natpmpGatewayCompile}
 
       # --- one archive ---
       # `ar r` INTO the nim archive rather than a merge of several: there is one

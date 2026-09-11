@@ -1,13 +1,7 @@
-// Unit tests for the module's own base64 codec.
-//
-// The codec used to be boost::beast::detail::base64, and boost is not a
-// declared dependency of this module: it arrived through the Qt plugin
-// backend's propagated inputs. A Bare module links no Qt, so the header was
-// simply absent and delivery_module could not produce a Bare artifact on ANY
-// platform ("fatal error: 'boost/beast/core/detail/base64.hpp' file not
-// found"). These tests pin the behaviour the replacement has to reproduce:
-// standard base64 with '=' padding, and a decoder that stops at the first
-// character outside the alphabet -- which is what boost::beast's did.
+// Unit tests for the module's own base64 codec. src/base64.h records why the
+// module stopped using boost::beast's; these pin the behaviour the replacement
+// had to reproduce: standard base64 with '=' padding, and a decoder that stops
+// at the first character outside the alphabet rather than throwing.
 
 #include <logos_test.h>
 
