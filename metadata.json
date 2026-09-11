@@ -27,7 +27,9 @@
     "capabilities": [],
     "nix": {
         "packages": {
-            "runtime": ["postgresql", "nlohmann_json"]
+            "runtime": [
+                "nlohmann_json"
+            ]
         },
         "external_libraries": [
             {
@@ -39,7 +41,42 @@
             }
         ],
         "cmake": {
-            "extra_include_dirs": ["lib"]
-        }
+            "extra_include_dirs": [
+                "lib"
+            ]
+        },
+        "platforms": [
+            {
+                "when": {
+                    "os": "linux",
+                    "abi": "gnu"
+                },
+                "packages": {
+                    "runtime": [
+                        "postgresql"
+                    ]
+                }
+            },
+            {
+                "when": {
+                    "os": "darwin"
+                },
+                "packages": {
+                    "runtime": [
+                        "postgresql"
+                    ]
+                }
+            },
+            {
+                "when": {
+                    "os": "windows"
+                },
+                "packages": {
+                    "runtime": [
+                        "postgresql"
+                    ]
+                }
+            }
+        ]
     }
 }

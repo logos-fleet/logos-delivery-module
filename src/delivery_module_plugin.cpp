@@ -13,9 +13,9 @@
 #include <unordered_map>
 
 #include <nlohmann/json.hpp>
-#include <boost/beast/core/detail/base64.hpp>
 
 #include "api_call_handler.h"
+#include "base64.h"
 extern "C" {
 #include <liblogosdelivery.h>
 // Kernel tier: unstable, may change without a deprecation cycle. Only
@@ -25,22 +25,8 @@ extern "C" {
 }
 
 namespace {
-namespace b64 = boost::beast::detail::base64;
-
-std::string base64Encode(const std::vector<uint8_t>& data) {
-    std::string out;
-    out.resize(b64::encoded_size(data.size()));
-    out.resize(b64::encode(out.data(), data.data(), data.size()));
-    return out;
-}
-
-std::vector<uint8_t> base64Decode(const std::string& encoded) {
-    std::vector<uint8_t> out;
-    out.resize(b64::decoded_size(encoded.size()));
-    auto [written, read] = b64::decode(out.data(), encoded.data(), encoded.size());
-    out.resize(written);
-    return out;
-}
+using delivery::base64Decode;
+using delivery::base64Encode;
 
 int64_t currentTimestampNs() {
     struct timespec ts;

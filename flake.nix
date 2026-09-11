@@ -9,12 +9,38 @@
   };
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.5";
+    # A rev on the logos-fleet fork, not logos-co: the mobile Bare outputs this
+    # flake exposes -- and the `externalLibInputs.<name>.mobilePackages` contract
+    # the two entries below answer -- are a property of the BUILDER, and only
+    # that line has them yet. A builder without them simply publishes no mobile
+    # keys in `packages`, so pointing this back at logos-co degrades the flake
+    # rather than breaking it.
+    logos-module-builder.url = "github:logos-fleet/logos-module-builder/8eba493";
     nix-bundle-lgx.url = "github:logos-co/nix-bundle-lgx";
     logos-delivery.url = "git+https://github.com/logos-messaging/logos-delivery?submodules=1";
   };
 
   outputs = inputs@{ logos-module-builder, ... }:
+    let
+      # The mobile half of both externalLibInputs below. nim-delivery's and
+      # zerokit's own flakes answer for desktop systems only, and
+      # logos-module-builder cannot recompile an external library for a phone
+      # either -- it comes from somewhere else entirely. So this flake
+      # cross-builds them itself, from the SAME locked input, and the builder
+      # stages the results over the build-platform images its `generate` step
+      # left in lib/. See nix/mobile-libs.nix.
+      mobileLibs = import ./nix/mobile-libs.nix {
+        inherit (logos-module-builder.inputs.nixpkgs) lib;
+        inherit (logos-module-builder.inputs) rust-overlay;
+        inherit (logos-module-builder.lib.common) mkPkgsWith;
+        deliverySrc = inputs.logos-delivery;
+        # Which cargo triple each mobile pseudo-system is, read off the builder
+        # rather than restated: a list copied into this flake would go stale
+        # silently. `or { }` because a builder predating the mobile targets has
+        # no such attribute -- then this flake simply has no mobile keys.
+        rustTargets = logos-module-builder.lib.common.mobileRustTargets or { };
+      };
+    in
     logos-module-builder.lib.mkLogosModule {
       src = ./.;
       configFile = ./metadata.json;
@@ -23,6 +49,12 @@
         logosdelivery = {
           input = inputs.logos-delivery;
           packages.default = "liblogosdelivery";
+          # { system, pkgs, buildSystem } -> a derivation laid out lib/ +
+          # include/. A FUNCTION rather than an attrset keyed by system: `pkgs`
+          # is the target package set the Bare build is already using, and for
+          # Android its BUILD platform is a parameter, so an attrset would have
+          # to pick one and a Mac cannot realise an x86_64-linux one.
+          mobilePackages = args: (mobileLibs args).logosdelivery;
         };
         # Bundle librln.dylib alongside liblogosdelivery.dylib so the transitive
         # dep resolves at runtime (and during logos-cpp-generator dlopen).
@@ -32,6 +64,13 @@
         rln = {
           input = inputs.logos-delivery;
           packages.default = "rln";
+          # The target's librln.a. On a phone it is also MERGED into
+          # liblogosdelivery.a -- CMakeLists names only `logosdelivery` in
+          # EXTERNAL_LIBS, and a static link has no load time at which a
+          # transitive dependency could be resolved. This entry still answers,
+          # because "rln, built for aarch64-ios" is a real thing and the
+          # builder refuses an entry with no build for the target by name.
+          mobilePackages = args: (mobileLibs args).rln;
         };
       };
       tests = {
