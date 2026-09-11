@@ -26,7 +26,7 @@ LOGOS_TEST(createNode_succeeds_when_ffi_returns_non_null_context) {
     DeliveryModuleImpl impl;
     LOGOS_ASSERT_TRUE(impl.createNode(R"({"logLevel":"INFO"})").success);
     LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_create_node"));
-    LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_set_event_callback"));
+    LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_add_event_listener"));
 }
 
 LOGOS_TEST(createNode_fails_when_ffi_returns_null) {
@@ -54,7 +54,7 @@ LOGOS_TEST(createNode_succeeds_with_logos_dev_preset_config) {
     DeliveryModuleImpl impl;
     LOGOS_ASSERT_TRUE(impl.createNode(R"({"logLevel":"DEBUG","mode":"Core","preset":"logos.dev"})").success);
     LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_create_node"));
-    LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_set_event_callback"));
+    LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_add_event_listener"));
 }
 
 // start
@@ -246,18 +246,143 @@ LOGOS_TEST(unsubscribe_succeeds_with_context) {
     delete impl;
 }
 
+// storeQuery
+
+LOGOS_TEST(storeQuery_fails_without_createNode) {
+    auto t = LogosTestContext("delivery_module");
+    DeliveryModuleImpl impl;
+    StdLogosResult result = impl.storeQuery(
+        R"({"requestId":"req-1","includeData":true,"paginationForward":true})",
+        "/ip4/127.0.0.1/tcp/60000/p2p/16Uiu2peer", 5000);
+    LOGOS_ASSERT_FALSE(result.success);
+    LOGOS_ASSERT_FALSE(result.error.empty());
+}
+
+LOGOS_TEST(storeQuery_returns_response_json) {
+    auto t = LogosTestContext("delivery_module");
+    auto* impl = createInitializedImpl(t);
+
+    const char* responseJson =
+        R"({"requestId":"req-1","statusCode":200,"statusDesc":"OK","messages":[]})";
+    t.mockCFunction("waku_store_query").returns(responseJson);
+
+    StdLogosResult result = impl->storeQuery(
+        R"({"requestId":"req-1","includeData":true,"paginationForward":true})",
+        "/ip4/127.0.0.1/tcp/60000/p2p/16Uiu2peer", 5000);
+
+    LOGOS_ASSERT_TRUE(result.success);
+    LOGOS_ASSERT_EQ(result.value.get<std::string>(), std::string(responseJson));
+    LOGOS_ASSERT_EQ(t.cFunctionCallCount("waku_store_query"), 1);
+
+    delete impl;
+}
+
+// channelCreate
+
+LOGOS_TEST(channelCreate_fails_without_createNode) {
+    auto t = LogosTestContext("delivery_module");
+    DeliveryModuleImpl impl;
+    LOGOS_ASSERT_FALSE(impl.channelCreate("chan-1", "/test/1/delivery/proto", "sender-1").success);
+    LOGOS_ASSERT_FALSE(t.cFunctionCalled("logosdelivery_channel_create"));
+}
+
+LOGOS_TEST(channelCreate_returns_channel_id) {
+    auto t = LogosTestContext("delivery_module");
+    auto* impl = createInitializedImpl(t);
+
+    t.mockCFunction("logosdelivery_channel_create").returns("chan-1");
+    StdLogosResult result = impl->channelCreate("chan-1", "/test/1/delivery/proto", "sender-1");
+
+    LOGOS_ASSERT_TRUE(result.success);
+    LOGOS_ASSERT_EQ(result.value.get<std::string>(), std::string("chan-1"));
+    LOGOS_ASSERT_EQ(t.cFunctionCallCount("logosdelivery_channel_create"), 1);
+
+    delete impl;
+}
+
+// channelExists
+
+LOGOS_TEST(channelExists_fails_without_createNode) {
+    auto t = LogosTestContext("delivery_module");
+    DeliveryModuleImpl impl;
+    LOGOS_ASSERT_FALSE(impl.channelExists("chan-1").success);
+}
+
+LOGOS_TEST(channelExists_passes_through_true_and_false) {
+    auto t = LogosTestContext("delivery_module");
+    auto* impl = createInitializedImpl(t);
+
+    // The FFI returns "true"/"false" verbatim; an unknown id is not an error.
+    t.mockCFunction("logosdelivery_channel_exists").returns("true");
+    StdLogosResult existing = impl->channelExists("chan-1");
+    LOGOS_ASSERT_TRUE(existing.success);
+    LOGOS_ASSERT_EQ(existing.value.get<std::string>(), std::string("true"));
+
+    t.mockCFunction("logosdelivery_channel_exists").returns("false");
+    StdLogosResult missing = impl->channelExists("no-such-chan");
+    LOGOS_ASSERT_TRUE(missing.success);
+    LOGOS_ASSERT_EQ(missing.value.get<std::string>(), std::string("false"));
+
+    LOGOS_ASSERT_EQ(t.cFunctionCallCount("logosdelivery_channel_exists"), 2);
+
+    delete impl;
+}
+
+// channelSend
+
+LOGOS_TEST(channelSend_fails_without_createNode) {
+    auto t = LogosTestContext("delivery_module");
+    DeliveryModuleImpl impl;
+
+    std::vector<uint8_t> payload{'h','e','l','l','o'};
+    LOGOS_ASSERT_FALSE(impl.channelSend("chan-1", payload).success);
+}
+
+LOGOS_TEST(channelSend_succeeds_and_returns_request_id) {
+    auto t = LogosTestContext("delivery_module");
+    auto* impl = createInitializedImpl(t);
+
+    t.mockCFunction("logosdelivery_channel_send").returns("req-id-chan-42");
+    std::vector<uint8_t> payload{'h','e','l','l','o',' ','c','h','a','n'};
+    StdLogosResult result = impl->channelSend("chan-1", payload);
+
+    LOGOS_ASSERT_TRUE(result.success);
+    LOGOS_ASSERT_EQ(result.value.get<std::string>(), std::string("req-id-chan-42"));
+    LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_channel_send"));
+
+    delete impl;
+}
+
+// channelClose
+
+LOGOS_TEST(channelClose_fails_without_createNode) {
+    auto t = LogosTestContext("delivery_module");
+    DeliveryModuleImpl impl;
+    LOGOS_ASSERT_FALSE(impl.channelClose("chan-1").success);
+}
+
+LOGOS_TEST(channelClose_succeeds_with_context) {
+    auto t = LogosTestContext("delivery_module");
+    auto* impl = createInitializedImpl(t);
+
+    LOGOS_ASSERT_TRUE(impl->channelClose("chan-1").success);
+    LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_channel_close"));
+
+    delete impl;
+}
+
 // getAvailableNodeInfoIDs
 
 LOGOS_TEST(getAvailableNodeInfoIDs_returns_mocked_string) {
     auto t = LogosTestContext("delivery_module");
     auto* impl = createInitializedImpl(t);
 
-    t.mockCFunction("logosdelivery_get_available_node_info_ids").returns("@[Version,PeerID]");
+    t.mockCFunction("logosdelivery_get_available_node_info_ids").returns(R"(["Version","MyPeerId"])");
     StdLogosResult result = impl->getAvailableNodeInfoIDs();
 
     LOGOS_ASSERT_TRUE(result.success);
     LOGOS_ASSERT(t.cFunctionCalled("logosdelivery_get_available_node_info_ids"));
-    LOGOS_ASSERT_EQ(result.value.get<std::string>(), std::string("@[Version,PeerID]"));
+    LOGOS_ASSERT_EQ(result.value.get<std::string>(), std::string(R"(["Version","MyPeerId"])"));
 
     delete impl;
 }

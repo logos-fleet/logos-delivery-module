@@ -4,8 +4,6 @@ Wrap LogosMessaging API (liblogosdelivery) and make it available as a Logos Core
 
 This module provides high-level message delivery capabilities through the liblogosdelivery interface from [logos-delivery](https://github.com/logos-messaging/logos-delivery), packaged as a Logos module plugin compatible with logos-core.
 
-Full API documentation is in [`src/delivery_module_plugin.h`](src/delivery_module_plugin.h) (`DeliveryModulePlugin`).
-
 ## How to Build
 
 ### Using Nix (Recommended)
@@ -85,159 +83,6 @@ result/
 
 All dependencies are automatically handled by the Nix flake configuration.
 
-## Module Interface
-
-The delivery module provides the following API methods (all synchronous, all return LogosResult):
-
-- `createNode(cfg: QString)` - Initialize the delivery node with a JSON configuration (call once)
-- `start()` - Start the delivery node
-- `stop()` - Stop the delivery node
-- `send(contentTopic: QString, payload: QString)` - Send a message (returns a request id)
-- `subscribe(contentTopic: QString)` - Subscribe to receive messages on a topic
-- `unsubscribe(contentTopic: QString)` - Unsubscribe from a topic
-- `getAvailableNodeInfoIDs()` - List queryable node info identifiers
-- `getNodeInfo(nodeInfoId: QString)` - Retrieve node info by identifier
-- `getAvailableConfigs()` - Retrieve available configuration parameter descriptions
-- `collectOpenMetricsText()` - Node metrics as OpenMetrics/Prometheus text for the `openmetrics` module (see [docs/run-node.md → Metrics](docs/run-node.md#metrics))
-
-### Node Configuration (`createNode`)
-
-`createNode` accepts a **flat** JSON object whose keys correspond to `WakuNodeConf`
-field names (camelCase) from
-[logos-delivery](https://github.com/logos-messaging/logos-delivery).
-Unknown keys are silently ignored. Every field has a built-in default, so only
-values that differ from defaults need to be supplied.
-
-#### Commonly used keys
-
-| Key                  | Type             | Default    | Description                              |
-|----------------------|------------------|------------|------------------------------------------|
-| `mode`               | string           | `"noMode"` | `"Core"`, `"Edge"`, or `"noMode"`        |
-| `preset`             | string           | `""`       | Network preset (`"logos.test"`, `"logos.dev"`, `"twn"`) |
-| `clusterId`          | number (uint16)  | `0`        | Cluster identifier                       |
-| `entryNodes`         | array of string  | `[]`       | Bootstrap peers (enrtree / multiaddress) |
-| `relay`              | boolean          | `false`    | Enable relay protocol                    |
-| `rlnRelay`           | boolean          | `false`    | Enable RLN rate-limit nullifier          |
-| `tcpPort`            | number (uint16)  | `60000`    | P2P TCP listen port                      |
-| `numShardsInNetwork` | number (uint16)  | `1`        | Auto-sharding shard count                |
-| `logLevel`           | string           | `"INFO"`   | `"TRACE"`, `"DEBUG"`, `"INFO"`, `"WARN"` |
-| `logFormat`          | string           | `"TEXT"`   | `"TEXT"` or `"JSON"`                     |
-| `maxMessageSize`     | string           | `"150KiB"` | Maximum message payload size             |
-
-#### Presets
-
-Using a `preset` populates cluster ID, entry nodes, sharding, RLN, and other
-network-specific defaults automatically. Individual keys supplied alongside a
-preset override the preset values.
-
-- `"logos.test"` – Logos Test fleet (the default for running a node; mix
-  enabled, p2pReliability on, auto-shards, built-in bootstrap nodes).
-- `"logos.dev"` – Logos Dev Network (cluster 2, mix enabled, p2pReliability on,
-  8 auto-shards, built-in bootstrap nodes).
-- `"twn"` – The RLN-protected Waku Network (cluster 1).
-
-Minimal example using the default `logos.test` preset:
-
-```json
-{
-  "logLevel": "INFO",
-  "mode": "Core",
-  "preset": "logos.test"
-}
-```
-
-### Content Topics
-
-Content topics identify message channels for publishing and subscribing. Use a
-properly structured content topic for your application following the format
-specified in
-[LIP-23: Topics](https://lip.logos.co/messaging/informational/23/topics.html#content-topics).
-
-Example: `"/myapp/1/chat/proto"`
-
-### Sending Messages (`send`)
-
-`send(contentTopic, payload)` accepts a content topic and a raw payload string.
-The plugin converts the payload to UTF-8 bytes, base64-encodes it, and wraps it
-in a JSON envelope before crossing the FFI boundary:
-
-```json
-{ "contentTopic": "<topic>", "payload": "<base64>", "ephemeral": false }
-```
-
-The call is synchronous and returns a **request id** on success. The actual
-network delivery is asynchronous — track results via the emitted events:
-
-- **`messageError`** – the module could not send the message.
-- **`messagePropagated`** – the message reached the network but is not yet
-  validated.
-- **`messageSent`** – the message has been confirmed by the network.
-
-### Events
-
-Asynchronous events are emitted off-thread as Logos Plugin events. Each event
-carries a `QVariantList data` with positional values:
-
-- **`messageSent`** – message confirmed by the network
-  - `data[0]` (`QString`): request id
-  - `data[1]` (`QString`): message hash
-  - `data[2]` (`QString`): local timestamp (ISO-8601)
-- **`messageError`** – send failure
-  - `data[0]` (`QString`): request id
-  - `data[1]` (`QString`): message hash
-  - `data[2]` (`QString`): error message
-  - `data[3]` (`QString`): local timestamp (ISO-8601)
-- **`messagePropagated`** – message reached the network but not yet validated
-  - `data[0]` (`QString`): request id
-  - `data[1]` (`QString`): message hash
-  - `data[2]` (`QString`): local timestamp (ISO-8601)
-- **`messageReceived`** – a message arrived on a subscribed topic
-  - `data[0]` (`QString`): message hash
-  - `data[1]` (`QString`): content topic
-  - `data[2]` (`QString`): payload (base64-encoded)
-  - `data[3]` (`QString`): timestamp (nanoseconds since epoch)
-- **`connectionStateChanged`** – node connectivity change
-  - `data[0]` (`QString`): connection status
-  - `data[1]` (`QString`): local timestamp (ISO-8601)
-
-### Metrics
-
-`collectOpenMetricsText()` returns the node's internal Prometheus metrics as
-OpenMetrics/Prometheus exposition text for the
-[`openmetrics`](https://github.com/logos-co/openmetrics-module) module to scrape.
-For how to wire up `openmetrics` and scrape a running node, see
-[Running a node → Metrics](docs/run-node.md#metrics).
-
-## Architecture
-
-```
-┌─────────────────────────────────────┐
-│  Logos Core (Qt Application)        │
-└──────────────┬──────────────────────┘
-               │
-               │ Plugin Interface
-               ▼
-┌─────────────────────────────────────┐
-│  delivery_module_plugin             │
-│  (Qt Plugin - this repository)      │
-└──────────────┬──────────────────────┘
-               │
-               │ C FFI
-               ▼
-┌─────────────────────────────────────┐
-│  liblogosdelivery                   │
-│  (from logos-delivery)              │
-│  High-level Message-delivery API    │
-└──────────────┬──────────────────────┘
-               │
-               │ Nim API
-               ▼
-┌─────────────────────────────────────┐
-│ logos-delivery                      │
-│ Core message-delivery implementation│
-└─────────────────────────────────────┘
-```
-
 ## Development
 
 ### Local Development
@@ -252,3 +97,38 @@ cmake -B build -S . -GNinja
 # Build
 ninja -C build
 ```
+
+## Documentation
+
+The module's documentation is published at
+**<https://logos-co.github.io/logos-delivery-module/>** — API reference,
+configuration, events, and the guides for running and querying a node.
+
+### Building the documentation
+
+The site is Doxygen (API extraction) → Breathe → Sphinx (rendering), with the
+Markdown guides in `docs/pages/` pulled in via myst-parser.
+
+`doxygen` is not in the dev shell, so install it once:
+
+```bash
+sudo apt-get install -y doxygen     # macOS: brew install doxygen
+```
+
+Then:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r docs/requirements-dev.txt
+
+make docs            # build into docs/_build/html
+make docs-preview    # rebuild and reload the browser as you edit
+```
+
+
+Publishing is automatic: `.github/workflows/docs.yml` deploys to the
+`gh-pages` branch when a release is published, under `latest/` and the release
+tag. Pushing to a branch builds the site and uploads it as a `docs-preview`
+artifact instead, so a docs change can be previewed before it ships. Adding a
+new release to the version dropdown means editing
+[`docs/_root/switcher.json`](docs/_root/switcher.json).

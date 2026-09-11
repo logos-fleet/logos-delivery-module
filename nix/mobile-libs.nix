@@ -26,7 +26,7 @@
 # the target by name, and the honest answer to "where is rln for aarch64-ios"
 # is this derivation, not a null.
 #
-# THREE THINGS THE DESKTOP BUILD GETS ELSEWHERE:
+# TWO THINGS THE DESKTOP BUILD GETS ELSEWHERE:
 #
 #   miniupnpc /   nat_traversal reaches them with `{.passl: <abs>/lib*.a.}`, a
 #   libnatpmp     LINK-time flag. `--app:staticlib` never links, so they are
@@ -35,9 +35,6 @@
 #                 all -- the SDK has no <net/route.h> -- so logos-delivery's own
 #                 `library/ios_natpmp_stubs.c` supplies getdefaultgateway(),
 #                 exactly as its `libLogosDeliveryIOS` nimble task does.
-#   BearSSL's     `x509_noanchor_init` / `TAs` live in BearSSL's tools/ tree,
-#   tools half    which nim-bearssl does not `{.compile.}`. Same file, same
-#                 reason, same provenance: library/ios_bearssl_stubs.c.
 #   postgres      OFF. `--define:postgres` makes liblogosdelivery dlopen libpq,
 #                 and a phone has no libpq to open. That is a behavioural
 #                 decision, stated here rather than implied: delivery_module on
@@ -321,8 +318,6 @@ rec {
       # all; logos-delivery ships the stub that returns failure.
       "$CC" $CFLAGS_TARGET -c ${deliverySrc}/library/ios_natpmp_stubs.c \
         -o objs/natpmp_getgateway_stub.o
-      "$CC" $CFLAGS_TARGET -c ${deliverySrc}/library/ios_bearssl_stubs.c \
-        -o objs/bearssl_stubs.o
       ''}
 
       # --- one archive ---

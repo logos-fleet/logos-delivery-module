@@ -103,10 +103,6 @@ class LogosDelivery:
     def get_node_info(self, info_id: str, *, timeout: Optional[float] = None):
         return call_ok(self.client, "getNodeInfo", info_id, timeout=timeout)
 
-    def version(self, *, timeout: Optional[float] = None):
-        result = self.client.call(MODULE, "version", timeout=timeout)
-        return result.get("value", "") if isinstance(result, dict) else result
-
     def watch(self, event_name: str):
         return _watch_events(self.client, MODULE, event_name)
 
@@ -209,3 +205,8 @@ def event_content_topic(event: dict) -> Optional[str]:
     """contentTopic of a messageReceived event (arg 1)."""
     ct = event_arg(event, 1)
     return str(ct) if ct is not None else None
+
+
+def event_payload(event: dict) -> Any:
+    """payload of a messageReceived event (arg 2)."""
+    return event_arg(event, 2)
