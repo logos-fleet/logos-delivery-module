@@ -24,13 +24,16 @@
 # nor logos-messaging/logos-delivery is ours to push to. It rewrites the
 # hardcoded path to a RELATIVE one, so each test gets its own directory inside
 # the build tree: the tests still run (a `--skip` would drop them), and the
-# build no longer touches shared state. Distinct names per file because cargo
-# runs the test binaries concurrently from the same working directory and sled
-# takes an exclusive lock on its directory.
+# build no longer touches shared state. A distinct name per file so that the
+# two tests opening a sled database never share one directory, whatever order
+# or parallelism cargo picks.
 #
 # `--replace-fail` on purpose: if upstream changes those literals this build
 # stops, rather than silently going back to writing into /tmp.
-{ lib, delivery }:
+#
+# Only the desktop leg needs this. nix/mobile-libs.nix cross-builds rln itself
+# with `doCheck = false`, so these tests never run there.
+{ delivery }:
 
 let
   hermeticRln = rln: rln.overrideAttrs (old: {
@@ -44,26 +47,22 @@ let
     '';
   });
 
-  # Every package `logos-delivery` builds from nix/default.nix takes the rln
-  # derivation as the named argument `zerokitRln`, so `.override` swaps it for
-  # the hermetic one -- overrideAttrs could not, the dependency is baked into
-  # the call, not into the attrs.
-  patchSystem = system:
+  # Every OTHER package `logos-delivery` builds from nix/default.nix takes the
+  # rln derivation as the named argument `zerokitRln`, so `.override` swaps it
+  # for the hermetic one -- overrideAttrs could not, the dependency is baked
+  # into the call, not into the attrs. Relinking the whole set by name rather
+  # than a listed few: a package added upstream is then hermetic too, or fails
+  # loudly here, which is the same bargain `--replace-fail` makes above.
+  hermeticPackages = upstream:
     let
-      upstream = delivery.packages.${system};
       rln = hermeticRln upstream.rln;
-      relink = pkg: pkg.override { zerokitRln = rln; };
-      liblogosdelivery = relink upstream.liblogosdelivery;
     in
-    upstream // {
-      inherit rln liblogosdelivery;
-      wakucanary = relink upstream.wakucanary;
-      logosdeliverynode = relink upstream.logosdeliverynode;
-      default = liblogosdelivery;
-    };
+    builtins.mapAttrs
+      (name: pkg: if name == "rln" then rln else pkg.override { zerokitRln = rln; })
+      upstream;
 in
 # Shaped like a flake input (`packages.<system>.<name>`) so it can be handed to
 # `externalLibInputs.<name>.input` in place of the real one.
 {
-  packages = lib.genAttrs (builtins.attrNames delivery.packages) patchSystem;
+  packages = builtins.mapAttrs (_system: hermeticPackages) delivery.packages;
 }
