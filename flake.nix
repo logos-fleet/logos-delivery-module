@@ -40,6 +40,16 @@
         # no such attribute -- then this flake simply has no mobile keys.
         rustTargets = logos-module-builder.lib.common.mobileRustTargets or { };
       };
+
+      # `logos-delivery` with zerokit's pmtree tests made hermetic: upstream
+      # they open a sled database at the absolute path /tmp/pmtree-test-path,
+      # which on a shared macOS builder poisons /tmp for every later build and
+      # so for every mobile artifact. See nix/hermetic-delivery.nix and
+      # logos-workspace#126. Shaped like the flake input it stands in for.
+      logosDelivery = import ./nix/hermetic-delivery.nix {
+        inherit (logos-module-builder.inputs.nixpkgs) lib;
+        delivery = inputs.logos-delivery;
+      };
     in
     logos-module-builder.lib.mkLogosModule {
       src = ./.;
@@ -47,7 +57,7 @@
       flakeInputs = inputs;
       externalLibInputs = {
         logosdelivery = {
-          input = inputs.logos-delivery;
+          input = logosDelivery;
           packages.default = "liblogosdelivery";
           # { system, pkgs, buildSystem } -> a derivation laid out lib/ +
           # include/. A FUNCTION rather than an attrset keyed by system: `pkgs`
@@ -62,7 +72,7 @@
         # exact, cargoHash-corrected librln that liblogosdelivery links — zerokit
         # v2.0.2's own rln package has a stale committed cargoHash.
         rln = {
-          input = inputs.logos-delivery;
+          input = logosDelivery;
           packages.default = "rln";
           # The target's librln.a. On a phone it is also MERGED into
           # liblogosdelivery.a -- CMakeLists names only `logosdelivery` in
