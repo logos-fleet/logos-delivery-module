@@ -9,11 +9,14 @@
 // (nix/no-nim-signal-handler.nix), which takes ALL of those with it, SIGPIPE
 // included.
 //
-// SIGPIPE is the one that has to come back, and deliberately. chronos passes
-// `MSG_NOSIGNAL` on every send, but on Darwin Nim defines MSG_NOSIGNAL as 0, so
-// a write to a peer that has gone away raises SIGPIPE -- whose default action is
-// to kill the process. That is the everyday case for this module: the peer of a
-// failed dial or a dropped relay connection.
+// SIGPIPE is the one that comes back, and deliberately. chronos ignores it too,
+// in `globalInit()`, so the steady state is the same -- but that runs when a
+// dispatcher is first created, i.e. when the node starts, whereas Nim's ran at
+// NimMain. These two cases pin the window in between, and pin it without
+// depending on which chronos platform branch a target compiles. It is not a
+// theoretical window: chronos passes MSG_NOSIGNAL on every send and Nim defines
+// MSG_NOSIGNAL as 0 on Darwin, so a write to a peer that has gone away really
+// does raise SIGPIPE there, and its default action kills the process.
 //
 // Ignoring SIGPIPE is not the same kind of act as owning SIGSEGV. POSIX gives
 // the caller EPIPE instead, nothing is hidden, and it is what every networking

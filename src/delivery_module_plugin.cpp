@@ -66,14 +66,19 @@ constexpr const char* kEventNames[] = {
 //
 // liblogosdelivery is built with `--define:noSignalHandler`, because Nim's own
 // handler is armed for SIGSEGV/SIGBUS/SIGABRT/SIGFPE/SIGILL process-wide the
-// moment this module loads and then ALLOCATES while handling the fault -- so a
-// fault it cannot allocate through re-enters it until the stack guard page, and
-// the crash report is nothing but handler frames. The define takes Nim's
-// SIGPIPE line with it, and that one is worth keeping: chronos passes
-// MSG_NOSIGNAL on every send, but Nim defines MSG_NOSIGNAL as 0 on Darwin, so
-// writing to a peer that has gone away raises SIGPIPE -- and its default action
-// kills the process. A failed dial or a dropped relay connection is this
-// module's everyday case.
+// moment this module's NimMain runs and then ALLOCATES while handling the
+// fault -- so a fault it cannot allocate through re-enters it until the stack
+// guard page, and the crash report is nothing but handler frames.
+//
+// The define also takes the ONE line of that block worth keeping,
+// `c_signal(SIGPIPE, SIG_IGN)`. chronos sets SIGPIPE to SIG_IGN as well, in
+// `globalInit()`, so the steady state is unchanged -- but that runs when a
+// dispatcher is first created, i.e. when the node starts, and Nim's ran at
+// NimMain. This closes the window in between, without depending on which
+// chronos platform branch a target compiles. It matters because chronos passes
+// MSG_NOSIGNAL on every send and Nim defines MSG_NOSIGNAL as 0 on Darwin: a
+// write to a peer that has gone away really does raise SIGPIPE there, and its
+// default action kills the process.
 //
 // ONLY SIG_DFL IS REPLACED. Ignoring SIGPIPE hides nothing (POSIX hands the
 // caller EPIPE instead) and is what every networking library in a shared
