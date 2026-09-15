@@ -1,25 +1,13 @@
 # liblogosdelivery must not carry Nim's own signal handler.
 #
-# WHY. Nim's `system/excpt.nim` installs `signalHandler` for SIGSEGV, SIGBUS,
-# SIGABRT, SIGFPE, SIGILL and SIGINT from a module-init section, so it is armed
-# by `liblogosdeliveryNimMain` -- i.e. the moment delivery_module loads. It is
-# PROCESS-wide: from then on a fault anywhere in the host (Qt, another module,
-# the Shell itself) is delivered to it. And the handler's first act is
-#
-#   var buf = newStringOfCap(2000)   # -> newObjNoInit -> rawNewObj -> rawAlloc
-#
-# a GC allocation, on the faulting thread's own stack, from async-signal
-# context. If the fault it is handling is one the allocator cannot itself
-# survive -- an exhausted stack, or a fault inside `rawAlloc` -- it re-faults
-# inside its own first statement and is re-entered, for ever:
-#
-#   rawAlloc / rawNewObj / newObjNoInit / signalHandler / _sigtramp / rawNewObj …
-#
-# That is logos-workspace#150: a crash report whose every frame belongs to the
-# handler and not one frame to the code that actually failed. A signal handler
-# that allocates cannot report anything, so the library is built with
-# `--define:noSignalHandler` and the platform's own reporter (the iOS crash
-# reporter, a core file, lldb) sees the real fault instead.
+# WHY. nix/no-nim-signal-handler.nix records it, and logos-workspace#150 is what
+# it cost: Nim's `system/excpt.nim` arms `signalHandler` for SIGSEGV, SIGBUS,
+# SIGABRT, SIGFPE, SIGILL and SIGINT from a module-init section, so it becomes
+# the whole PROCESS's handler the moment delivery_module loads -- and its first
+# statement is a GC allocation, which a fault in the allocator or on an
+# exhausted stack cannot survive, so the handler re-enters itself for ever and
+# the crash report holds nothing but its own frames. The library is therefore
+# built with `--define:noSignalHandler`; this check is what keeps it that way.
 #
 # WHAT THIS ASSERTS, AND WHY BY STRING. Under the define Nim never compiles the
 # proc, so its message literals go with it. Asserting on the LITERAL rather than

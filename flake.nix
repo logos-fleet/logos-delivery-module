@@ -50,13 +50,10 @@
         delivery = inputs.logos-delivery;
       };
 
-      # ...and then built without Nim's own signal handler. Nim arms a
-      # PROCESS-wide SIGSEGV/SIGBUS/SIGABRT handler from a module-init section
-      # the moment this library loads, and that handler's first statement is a
-      # GC allocation -- so a fault it cannot allocate through (an exhausted
-      # stack, or a fault inside the allocator) re-enters it for ever and the
-      # crash report is nothing but handler frames. See
-      # nix/no-nim-signal-handler.nix and logos-workspace#150.
+      # ...and then built without Nim's own signal handler, which a library
+      # loaded into someone else's process has no business owning and which
+      # could never report a fault anyway. See nix/no-nim-signal-handler.nix
+      # and logos-workspace#150.
       #
       # Hermetic FIRST: it calls `.override`, which re-evaluates the package
       # from its arguments and would drop an `overrideAttrs` applied before it.
@@ -137,7 +134,7 @@
                 "$out/lib/liblogosdelivery.dylib"
             fi
           fi
-        
+
           # Use pkg-config to locate the exact libpq from the build environment
           LIBPQ_LIBDIR=$(pkg-config --variable=libdir libpq 2>/dev/null || true)
           if [ -n "$LIBPQ_LIBDIR" ] && [ -d "$LIBPQ_LIBDIR" ]; then

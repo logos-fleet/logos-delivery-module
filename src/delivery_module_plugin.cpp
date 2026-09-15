@@ -2,9 +2,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <csignal>
 #include <ctime>
 #include <initializer_list>
 #include <memory>
@@ -61,14 +61,12 @@ constexpr const char* kEventNames[] = {
 };
 
 // The one signal disposition this module asks the host process for, and it asks
-// for it here rather than leaving it to the Nim runtime. See
-// logos-workspace#150 and tests/test_signal_dispositions.cpp.
+// for it here rather than leaving it to the Nim runtime.
 //
-// liblogosdelivery is built with `--define:noSignalHandler`, because Nim's own
-// handler is armed for SIGSEGV/SIGBUS/SIGABRT/SIGFPE/SIGILL process-wide the
-// moment this module's NimMain runs and then ALLOCATES while handling the
-// fault -- so a fault it cannot allocate through re-enters it until the stack
-// guard page, and the crash report is nothing but handler frames.
+// liblogosdelivery is built with `--define:noSignalHandler`, which unarms the
+// SIGSEGV/SIGBUS/SIGABRT/SIGFPE/SIGILL handler Nim would otherwise install
+// process-wide at NimMain; nix/no-nim-signal-handler.nix records why that
+// handler could never report anything (logos-workspace#150).
 //
 // The define also takes the ONE line of that block worth keeping,
 // `c_signal(SIGPIPE, SIG_IGN)`. chronos sets SIGPIPE to SIG_IGN as well, in
