@@ -201,13 +201,24 @@ let
 
       # The argument list is logos-delivery's own nix/default.nix verbatim,
       # minus `--define:postgres` and minus the `--passL:` for librln (nothing
-      # is linked here), plus the cross flags.
+      # is linked here), plus the cross flags and `--define:noSignalHandler`.
+      #
+      # THE DEFINE. Nim installs a PROCESS-wide SIGSEGV/SIGBUS/SIGABRT handler
+      # from a module-init section, so it is armed the moment this archive's
+      # NimMain runs -- inside the Shell, for every fault in it, Qt's included.
+      # And the handler allocates (`newStringOfCap(2000)`) on the faulting
+      # thread's stack, so a fault it cannot allocate through re-enters it for
+      # ever; logos-workspace#150 is a mobile crash report made of nothing but
+      # those frames. Without it the iOS crash reporter sees the real fault.
+      # The desktop leg gets the same define through nim.cfg -- it does not
+      # write its own `nim c` line; see nix/no-nim-signal-handler.nix.
       nim c ${nimCrossFlags} "''${nimFlagsArray[@]}" \
         --noNimblePath ${pathArgs} \
         --path:$NAT_TRAV --path:$NAT_TRAV/src \
         --define:disable_libbacktrace \
         --define:git_version=mobile \
         --define:nimDebugDlOpen \
+        --define:noSignalHandler \
         ${iosNimFlags} \
         --threads:on --mm:refc --nimcache:$NIMCACHE \
         --app:staticlib --opt:size --noMain \

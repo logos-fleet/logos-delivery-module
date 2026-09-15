@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <csignal>
 #include <ctime>
 #include <initializer_list>
 #include <memory>
@@ -58,6 +59,37 @@ constexpr const char* kEventNames[] = {
     "onChannelMessageSent",
     "onChannelMessageError",
 };
+
+// The one signal disposition this module asks the host process for, and it asks
+// for it here rather than leaving it to the Nim runtime. See
+// logos-workspace#150 and tests/test_signal_dispositions.cpp.
+//
+// liblogosdelivery is built with `--define:noSignalHandler`, because Nim's own
+// handler is armed for SIGSEGV/SIGBUS/SIGABRT/SIGFPE/SIGILL process-wide the
+// moment this module loads and then ALLOCATES while handling the fault -- so a
+// fault it cannot allocate through re-enters it until the stack guard page, and
+// the crash report is nothing but handler frames. The define takes Nim's
+// SIGPIPE line with it, and that one is worth keeping: chronos passes
+// MSG_NOSIGNAL on every send, but Nim defines MSG_NOSIGNAL as 0 on Darwin, so
+// writing to a peer that has gone away raises SIGPIPE -- and its default action
+// kills the process. A failed dial or a dropped relay connection is this
+// module's everyday case.
+//
+// ONLY SIG_DFL IS REPLACED. Ignoring SIGPIPE hides nothing (POSIX hands the
+// caller EPIPE instead) and is what every networking library in a shared
+// process does, but a host that has made its own choice keeps it.
+void ignoreSigpipeIfUnhandled() {
+#ifndef _WIN32
+    struct sigaction current {};
+    if (sigaction(SIGPIPE, nullptr, &current) != 0) return;
+    if (current.sa_handler != SIG_DFL) return;
+
+    struct sigaction ignore {};
+    ignore.sa_handler = SIG_IGN;
+    sigemptyset(&ignore.sa_mask);
+    sigaction(SIGPIPE, &ignore, nullptr);
+#endif
+}
 } // namespace
 
 void DeliveryModuleImpl::start_callback(int callerRet, char* msg, size_t len, void* userData)
@@ -89,6 +121,7 @@ void DeliveryModuleImpl::stop_callback(int callerRet, char* msg, size_t len, voi
 DeliveryModuleImpl::DeliveryModuleImpl() : deliveryCtx(nullptr), deliveryCtxHandle(nullptr)
 {
     fprintf(stderr, "DeliveryModuleImpl: Initializing...\n");
+    ignoreSigpipeIfUnhandled();
     fprintf(stderr, "DeliveryModuleImpl: Initialized successfully\n");
 }
 
