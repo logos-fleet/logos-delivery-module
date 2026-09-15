@@ -14,6 +14,7 @@ logos_test(
         main.cpp
         test_delivery_module.cpp
         test_base64.cpp
+        test_signal_dispositions.cpp
     MOCK_C_SOURCES
         mocks/mock_liblogosdelivery.cpp
     EXTRA_INCLUDES

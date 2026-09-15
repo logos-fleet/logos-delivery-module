@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -58,6 +59,40 @@ constexpr const char* kEventNames[] = {
     "onChannelMessageSent",
     "onChannelMessageError",
 };
+
+// The one signal disposition this module asks the host process for, and it asks
+// for it here rather than leaving it to the Nim runtime.
+//
+// liblogosdelivery is built with `--define:noSignalHandler`, which unarms the
+// SIGSEGV/SIGBUS/SIGABRT/SIGFPE/SIGILL handler Nim would otherwise install
+// process-wide at NimMain; nix/no-nim-signal-handler.nix records why that
+// handler could never report anything (logos-workspace#150).
+//
+// The define also takes the ONE line of that block worth keeping,
+// `c_signal(SIGPIPE, SIG_IGN)`. chronos sets SIGPIPE to SIG_IGN as well, in
+// `globalInit()`, so the steady state is unchanged -- but that runs when a
+// dispatcher is first created, i.e. when the node starts, and Nim's ran at
+// NimMain. This closes the window in between, without depending on which
+// chronos platform branch a target compiles. It matters because chronos passes
+// MSG_NOSIGNAL on every send and Nim defines MSG_NOSIGNAL as 0 on Darwin: a
+// write to a peer that has gone away really does raise SIGPIPE there, and its
+// default action kills the process.
+//
+// ONLY SIG_DFL IS REPLACED. Ignoring SIGPIPE hides nothing (POSIX hands the
+// caller EPIPE instead) and is what every networking library in a shared
+// process does, but a host that has made its own choice keeps it.
+void ignoreSigpipeIfUnhandled() {
+#ifndef _WIN32
+    struct sigaction current {};
+    if (sigaction(SIGPIPE, nullptr, &current) != 0) return;
+    if (current.sa_handler != SIG_DFL) return;
+
+    struct sigaction ignore {};
+    ignore.sa_handler = SIG_IGN;
+    sigemptyset(&ignore.sa_mask);
+    sigaction(SIGPIPE, &ignore, nullptr);
+#endif
+}
 } // namespace
 
 void DeliveryModuleImpl::start_callback(int callerRet, char* msg, size_t len, void* userData)
@@ -89,6 +124,7 @@ void DeliveryModuleImpl::stop_callback(int callerRet, char* msg, size_t len, voi
 DeliveryModuleImpl::DeliveryModuleImpl() : deliveryCtx(nullptr), deliveryCtxHandle(nullptr)
 {
     fprintf(stderr, "DeliveryModuleImpl: Initializing...\n");
+    ignoreSigpipeIfUnhandled();
     fprintf(stderr, "DeliveryModuleImpl: Initialized successfully\n");
 }
 
