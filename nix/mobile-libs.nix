@@ -49,6 +49,10 @@
   mkPkgsWith,
   rust-overlay,
   deliverySrc,
+  # The diff logos-delivery is built with everywhere -- see
+  # nix/dialable-addresses.nix. Passed in rather than imported here so the
+  # desktop set, this cross build and the check cannot drift apart.
+  deliveryPatches,
   rustTargets,
 }:
 
@@ -179,6 +183,7 @@ let
     pname = "liblogosdelivery-${system}";
     version = "dev";
     src = deliverySrc;
+    patches = deliveryPatches;
 
     nativeBuildInputs = [ bp.nim-2_2 bp.git bp.gnumake bp.which ];
 

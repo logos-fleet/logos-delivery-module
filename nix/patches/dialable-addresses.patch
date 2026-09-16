@@ -1,0 +1,608 @@
+diff --git a/logos_delivery/waku/net/dialable.nim b/logos_delivery/waku/net/dialable.nim
+new file mode 100644
+index 000000000000..3ecfd9feb5fa
+--- /dev/null
++++ b/logos_delivery/waku/net/dialable.nim
+@@ -0,0 +1,94 @@
++{.push raises: [].}
++
++## Which multiaddresses may cross the network -- see logos-workspace#209.
++##
++## Peer discovery hands this node addresses that can never be reached from
++## anywhere: the wildcard bind address (`/ip4/0.0.0.0/...`, `/ip6/::/...`) and
++## the pre-bind port placeholder (`/tcp/0`, `/udp/0`). Both are *listen*
++## arguments that leaked into somebody's published peer record; as destinations
++## they are invalid by construction and can be refused without a network round
++## trip. On one physical-device run they cost 364 of 866 `Dialing failed`
++## lines, every one of them a full connect() that could not have worked.
++##
++## The same two rules screen what this node publishes: an address it could not
++## dial itself is no use to a reader either.
++##
++## logos-libp2p-module carries the same rule set in `src/addr_filter.{h,cpp}`
++## (logos-workspace#206). Its third verdict, `Loopback`, is deliberately NOT
++## carried here. Loopback IS dialable -- it reaches this host -- so it is a
++## publish-side question only, and its answer depends on the platform (on a
++## phone loopback is the device and nobody else; in the iOS simulator it is the
++## Mac's, and a peer there does answer). waku resolves a loopback bind to
++## loopback on purpose and pins that in `tests/test_announced_addresses.nim`,
++## so a verdict for it here would change behaviour this file is not about.
++##
++## Pure functions over a MultiAddress. Nothing here needs a node or a socket,
++## which is what lets `tests/test_dialable.nim` cover every case in one run.
++
++import std/[sequtils, strutils]
++import results
++import stew/endians2
++import libp2p/[multiaddress, multicodec]
++
++type AddrVerdict* = enum
++  Usable
++  Wildcard ## unspecified host: /ip4/0.0.0.0, /ip6/::
++  ZeroPort ## /tcp/0, /udp/0 -- "bind me any free port", never a destination
++
++func describe*(v: AddrVerdict): string =
++  case v
++  of Usable: "ok"
++  of Wildcard: "wildcard bind address"
++  of ZeroPort: "port 0"
++
++func hasZeroPort*(ma: MultiAddress): bool =
++  ## Port 0 means "the kernel picks a port at bind time".
++  ## initTAddress cannot parse dns-hosted entries, so read the port
++  ## bytes from the tcp or udp component directly.
++  for code in [multiCodec("tcp"), multiCodec("udp")]:
++    let part = ma[code].valueOr:
++      continue
++    let portBytes = part.protoArgument().valueOr:
++      continue
++    if portBytes.len == 2 and uint16.fromBytesBE(portBytes) == 0:
++      return true
++  return false
++
++func hasWildcardHost*(ma: MultiAddress): bool =
++  ## True only for an ip4/ip6 component that is positively the unspecified
++  ## address. An entry with no IP component to read -- a dns4 endpoint, a
++  ## circuit route -- is not condemned here; a shape this cannot judge is left
++  ## to the transport to accept or refuse, never silently dropped.
++  for code in [multiCodec("ip4"), multiCodec("ip6")]:
++    let part = ma[code].valueOr:
++      continue
++    let bytes = part.protoArgument().valueOr:
++      continue
++    if bytes.len > 0 and bytes.allIt(it == 0'u8):
++      return true
++  return false
++
++func classify*(ma: MultiAddress): AddrVerdict =
++  ## Port 0 outranks the wildcard host: an address carrying both is named by
++  ## the fault an operator reading the log sees most.
++  if ma.hasZeroPort():
++    return ZeroPort
++  if ma.hasWildcardHost():
++    return Wildcard
++  return Usable
++
++func isUsableAddr*(ma: MultiAddress): bool =
++  ma.classify() == Usable
++
++func usableAddrs*(addrs: openArray[MultiAddress]): seq[MultiAddress] =
++  ## Order is preserved.
++  addrs.filterIt(it.isUsableAddr())
++
++func describeUnusable*(addrs: openArray[MultiAddress]): string =
++  ## "<address> (<reason>)" per rejected entry, joined -- one log line.
++  var notes: seq[string]
++  for ma in addrs:
++    let verdict = ma.classify()
++    if verdict != Usable:
++      notes.add($ma & " (" & describe(verdict) & ")")
++  return notes.join(", ")
+diff --git a/logos_delivery/waku/net/net_config.nim b/logos_delivery/waku/net/net_config.nim
+index a0139ef12962..0329bd3b8429 100644
+--- a/logos_delivery/waku/net/net_config.nim
++++ b/logos_delivery/waku/net/net_config.nim
+@@ -4,6 +4,12 @@ import std/[sequtils, strutils, net], results, stew/endians2, chronicles
+ import libp2p/[multiaddress, multicodec, wire]
+ import ../../waku/waku_core/peers
+ import ../waku_enr
++import ./dialable
++
++## `hasZeroPort` lives in ./dialable now, beside the wildcard-host rule it is
++## always asked with. Re-exported so every current importer of this module --
++## waku_conf, waku_node -- keeps reaching it by the name it already uses.
++export dialable
+ 
+ type NetConfig* = object
+   hostAddress*: MultiAddress
+@@ -60,19 +66,6 @@ template ipQuicEndPoint(address: IpAddress, port: Port): MultiAddress =
+ template dns4QuicEndPoint(dns4DomainName: string, port: Port): MultiAddress =
+   dns4Ma(dns4DomainName) & udpPortMa(port) & quicFlag()
+ 
+-func hasZeroPort*(ma: MultiAddress): bool =
+-  ## Port 0 means "the kernel picks a port at bind time".
+-  ## initTAddress cannot parse dns-hosted entries, so read the port
+-  ## bytes from the tcp or udp component directly.
+-  for code in [multiCodec("tcp"), multiCodec("udp")]:
+-    let part = ma[code].valueOr:
+-      continue
+-    let portBytes = part.protoArgument().valueOr:
+-      continue
+-    if portBytes.len == 2 and uint16.fromBytesBE(portBytes) == 0:
+-      return true
+-  return false
+-
+ proc isWsAddress*(ma: MultiAddress): bool =
+   let
+     isWs = ma.contains(multiCodec("ws")).get()
+diff --git a/logos_delivery/waku/node/delivery_dialer.nim b/logos_delivery/waku/node/delivery_dialer.nim
+index 5d34a33c5f74..93a1c6ecf59f 100644
+--- a/logos_delivery/waku/node/delivery_dialer.nim
++++ b/logos_delivery/waku/node/delivery_dialer.nim
+@@ -1,7 +1,7 @@
+ {.push raises: [].}
+ 
+ import std/[sequtils, strutils]
+-import chronos, results
++import chronos, chronicles, results
+ import
+   libp2p/dial,
+   libp2p/dialer,
+@@ -10,15 +10,20 @@ import
+   libp2p/multiaddress,
+   libp2p/stream/connection,
+   libp2p/muxers/muxer
++import ../net/dialable
+ 
+ export dialer
+ 
++logScope:
++  topics = "delivery dialer"
++
+ proc sortQuicFirst(addrs: seq[MultiAddress]): seq[MultiAddress] =
+   addrs.filterIt("/quic-v1" in $it) & addrs.filterIt("/quic-v1" notin $it)
+ 
+ type DeliveryDialer* = ref object of Dialer
+   ## Logos Delivery dial policy layer. Replaces the switch dialer; every
+-  ## dial in the process goes through here. Dials quic addresses before tcp.
++  ## dial in the process goes through here. Dials quic addresses before tcp,
++  ## and refuses addresses that can never be a destination.
+ 
+ proc install*(T: typedesc[DeliveryDialer], switch: Switch) =
+   switch.dialer = DeliveryDialer.new(
+@@ -26,6 +31,30 @@ proc install*(T: typedesc[DeliveryDialer], switch: Switch) =
+     switch.ms, switch.nameResolver,
+   )
+ 
++proc admit(addrs: seq[MultiAddress]): seq[MultiAddress] =
++  ## The dial order, minus whatever cannot be a destination.
++  ##
++  ## `/ip4/0.0.0.0/...` and `/tcp/0` are LISTEN arguments that leak into
++  ## published peer records; discovery then hands them back as somewhere to
++  ## dial. They are invalid by construction, so refusing them here costs one
++  ## comparison where letting them through costs a full connect() that cannot
++  ## succeed -- logos-workspace#209 measured 364 such dials in one device run.
++  let kept = usableAddrs(addrs)
++  if kept.len != addrs.len:
++    debug "Screened un-dialable addresses", dropped = describeUnusable(addrs)
++  sortQuicFirst(kept)
++
++proc noneLeft(original, admitted: seq[MultiAddress]): bool =
++  ## Distinguishes "the caller named nothing" -- libp2p's own case, left to
++  ## libp2p -- from "everything the caller named was un-dialable".
++  admitted.len == 0 and original.len > 0
++
++proc refuse(peer: string, addrs: seq[MultiAddress]): ref DialFailedError =
++  newException(
++    DialFailedError,
++    "no dialable address for " & peer & ": " & describeUnusable(addrs),
++  )
++
+ method connect*(
+     self: DeliveryDialer,
+     peerId: PeerId,
+@@ -34,10 +63,21 @@ method connect*(
+     reuseConnection = true,
+     dir = Direction.Out,
+ ) {.async: (raises: [DialFailedError, CancelledError]).} =
++  let admitted = admit(addrs)
++  if noneLeft(addrs, admitted):
++    raise refuse($peerId, addrs)
+   await procCall Dialer(self).connect(
+-    peerId, sortQuicFirst(addrs), forceDial, reuseConnection, dir
++    peerId, admitted, forceDial, reuseConnection, dir
+   )
+ 
++method connect*(
++    self: DeliveryDialer, address: MultiAddress, allowUnknownPeerId = false
++): Future[PeerId] {.async: (raises: [DialFailedError, CancelledError]).} =
++  ## The peer-id-less overload, used for statically configured endpoints.
++  if not address.isUsableAddr():
++    raise refuse("an unknown peer", @[address])
++  await procCall Dialer(self).connect(address, allowUnknownPeerId)
++
+ method dial*(
+     self: DeliveryDialer,
+     peerId: PeerId,
+@@ -45,7 +85,10 @@ method dial*(
+     protos: seq[string],
+     forceDial = false,
+ ): Future[Stream] {.async: (raises: [DialFailedError, CancelledError]).} =
+-  await procCall Dialer(self).dial(peerId, sortQuicFirst(addrs), protos, forceDial)
++  let admitted = admit(addrs)
++  if noneLeft(addrs, admitted):
++    raise refuse($peerId, addrs)
++  await procCall Dialer(self).dial(peerId, admitted, protos, forceDial)
+ 
+ method dialAndUpgrade*(
+     self: DeliveryDialer,
+@@ -55,9 +98,18 @@ method dialAndUpgrade*(
+ ): Future[Muxer] {.
+     async: (raises: [CancelledError, MaError, TransportAddressError, LPError])
+ .} =
+-  await procCall Dialer(self).dialAndUpgrade(peerId, sortQuicFirst(addrs), dir)
++  ## Returns nil rather than raising when nothing survives: nil is already
++  ## this method's "no address succeeded", and DialFailedError is not the
++  ## answer its callers read.
++  let admitted = admit(addrs)
++  if noneLeft(addrs, admitted):
++    return nil
++  await procCall Dialer(self).dialAndUpgrade(peerId, admitted, dir)
+ 
+ method tryDial*(
+     self: DeliveryDialer, peerId: PeerId, addrs: seq[MultiAddress]
+ ): Future[Opt[MultiAddress]] {.async: (raises: [DialFailedError, CancelledError]).} =
+-  await procCall Dialer(self).tryDial(peerId, sortQuicFirst(addrs))
++  let admitted = admit(addrs)
++  if noneLeft(addrs, admitted):
++    raise refuse($peerId, addrs)
++  await procCall Dialer(self).tryDial(peerId, admitted)
+diff --git a/logos_delivery/waku/node/waku_node.nim b/logos_delivery/waku/node/waku_node.nim
+index 31b19e12c505..4799c0287d51 100644
+--- a/logos_delivery/waku/node/waku_node.nim
++++ b/logos_delivery/waku/node/waku_node.nim
+@@ -207,17 +207,63 @@ proc getCapabilitiesGetter(node: WakuNode): GetCapabilities =
+       return @[]
+     return node.enr.getCapabilities()
+ 
+-proc getWakuPeerRecordGetter(node: WakuNode): GetWakuPeerRecord =
++proc getWakuPeerRecordGetter*(node: WakuNode): GetWakuPeerRecord =
++  ## Exported for tests/test_announced_addresses.nim: this is the publish
++  ## boundary, and what it hands out is signed and read by other nodes.
+   return proc(): WakuPeerRecord {.closure, gcsafe, raises: [].} =
+     var mixKey: string
+     if not node.wakuMix.isNil():
+       mixKey = node.wakuMix.pubKey.to0xHex()
+     return WakuPeerRecord.init(
+       peerId = node.switch.peerInfo.peerId,
+-      addresses = node.announcedAddresses,
++      # Screened rather than raw: rendezvous mounts BEFORE start, so on a
++      # wildcard bind `announcedAddresses` is still the configured
++      # /ip4/0.0.0.0/tcp/0 here. An address this node could not dial itself
++      # is no use to a reader -- logos-workspace#209.
++      addresses = usableAddrs(node.announcedAddresses),
+       mixKey = mixKey,
+     )
+ 
++proc resolveAddresses*(
++    addrs: seq[MultiAddress], listenAddrs: seq[MultiAddress]
++): seq[MultiAddress] =
++  ## Turn configured addresses into ones a reader can dial: port 0 becomes the
++  ## port that transport actually bound, and a wildcard host becomes this
++  ## host's primary IP. Whatever is still un-dialable after that is dropped.
++  ##
++  ## Called from two places on purpose. `resolveAnnouncedBaseAddresses` runs it
++  ## once per start; the base address mapper runs it on the raw listen
++  ## addresses for the window BEFORE that, because libp2p's service-discovery
++  ## signs and publishes peerInfo.addrs inside that window and used to publish
++  ## the wildcard bind address from it -- logos-workspace#209.
++  let substituted = substituteBoundPorts(addrs, listenAddrs)
++
++  const LoopbackIp = parseIpAddress("127.0.0.1")
++  const RewrittenHosts =
++    [static(parseIpAddress("0.0.0.0")), static(parseIpAddress("::"))]
++  var primaryIp = LoopbackIp
++  try:
++    primaryIp = getPrimaryIPAddr()
++  except Exception as e:
++    ## getPrimaryIPAddr declares a bare Exception effect on Windows, so
++    ## a narrower catch fails the raises check there.
++    debug "Could not retrieve the primary IP address", msg = e.msg
++
++  var resolved = newSeq[MultiAddress](0)
++  for address in substituted:
++    let ip = address.getIp().valueOr:
++      resolved.add(address)
++      continue
++    if ip notin RewrittenHosts:
++      resolved.add(address)
++      continue
++    let rewritten = address.replaceIp(primaryIp).valueOr:
++      resolved.add(address)
++      continue
++    resolved.add(rewritten)
++
++  return usableAddrs(resolved)
++
+ proc copyCommittedAddresses*(node: WakuNode) =
+   ## Copy the committed peerInfo addresses into announcedAddresses
+   ## and run the ENR refresh callback, once start has resolved the addresses.
+@@ -264,12 +310,15 @@ proc new*(
+     switch.peerInfo.announcedAddrs = netConfig.announcedAddresses
+ 
+   ## The base mapper answers with the resolved addresses.
+-  ## NAT and relay mappers run after it. Until then it drops zero-port entries.
++  ## NAT and relay mappers run after it. Until start has resolved the base it
++  ## resolves the listen addresses the same way, rather than handing them on
++  ## raw: a wildcard bind would otherwise be signed into the peer record
++  ## libp2p's service-discovery publishes during switch.start.
+   let baseMapper = proc(
+       listenAddrs: seq[MultiAddress]
+   ): Future[seq[MultiAddress]] {.gcsafe, async: (raises: [CancelledError]).} =
+     let base = node.baseAnnounced.valueOr:
+-      return listenAddrs.filterIt(not it.hasZeroPort())
++      return resolveAddresses(listenAddrs, listenAddrs)
+     return base
+   switch.peerInfo.addressMappers.add(baseMapper)
+   switch.peerInfo.addObserver(
+@@ -504,8 +553,6 @@ proc mountRendezvous*(
+ 
+ proc resolveAnnouncedBaseAddresses(node: WakuNode) =
+   ## Runs once per start, after the sockets bind.
+-  ## Here the configured addresses become real: port 0 becomes
+-  ## the bound port, and a wildcard host becomes the primary IP.
+   ## Everything the node announces builds on this set.
+   if node.extMultiAddrsOnly:
+     ## announcedAddrs bypasses the mappers. The configured set is final.
+@@ -513,34 +560,8 @@ proc resolveAnnouncedBaseAddresses(node: WakuNode) =
+     node.announcedAddresses = node.configuredAnnounced
+     return
+ 
+-  let substituted =
+-    substituteBoundPorts(node.configuredAnnounced, node.switch.peerInfo.listenAddrs)
+-
+-  const LoopbackIp = parseIpAddress("127.0.0.1")
+-  const RewrittenHosts =
+-    [static(parseIpAddress("0.0.0.0")), static(parseIpAddress("::"))]
+-  var primaryIp = LoopbackIp
+-  try:
+-    primaryIp = getPrimaryIPAddr()
+-  except Exception as e:
+-    ## getPrimaryIPAddr declares a bare Exception effect on Windows, so
+-    ## a narrower catch fails the raises check there.
+-    debug "Could not retrieve the primary IP address", msg = e.msg
+-
+-  var resolved = newSeq[MultiAddress](0)
+-  for address in substituted:
+-    let ip = address.getIp().valueOr:
+-      resolved.add(address)
+-      continue
+-    if ip notin RewrittenHosts:
+-      resolved.add(address)
+-      continue
+-    let rewritten = address.replaceIp(primaryIp).valueOr:
+-      resolved.add(address)
+-      continue
+-    resolved.add(rewritten)
+-
+-  let base = resolved.filterIt(not it.hasZeroPort())
++  let base =
++    resolveAddresses(node.configuredAnnounced, node.switch.peerInfo.listenAddrs)
+   node.baseAnnounced = Opt.some(base)
+   node.announcedAddresses = base
+   info "Announced base resolved", addrs = $base
+diff --git a/tests/all_tests_waku.nim b/tests/all_tests_waku.nim
+index bfa8ec099641..a481ffd84bb0 100644
+--- a/tests/all_tests_waku.nim
++++ b/tests/all_tests_waku.nim
+@@ -46,6 +46,8 @@ import
+   # Waku v2 tests
+   ./test_nat_config,
+   ./test_announced_addresses,
++  ./test_delivery_dialer,
++  ./test_dialable,
+   ./test_wakunode,
+   ./test_peer_store_extended,
+   ./test_message_cache,
+diff --git a/tests/test_announced_addresses.nim b/tests/test_announced_addresses.nim
+index 9857252711a0..6de6ef312fbc 100644
+--- a/tests/test_announced_addresses.nim
++++ b/tests/test_announced_addresses.nim
+@@ -75,6 +75,47 @@ suite "Announced addresses":
+       node.announcedAddresses.allIt("0.0.0.0" notin $it)
+     await node.stop()
+ 
++  asyncTest "no address peerInfo commits during start is un-dialable":
++    ## The publish window of logos-workspace#209. libp2p's service-discovery
++    ## signs and publishes peerInfo.addrs while the switch starts -- after the
++    ## transports bind, before the node resolves its announced base -- and a
++    ## device run published /ip4/0.0.0.0/tcp/53024 from exactly there.
++    ## Every committed set is recorded, so the assertion does not depend on
++    ## which of them the protocol happened to read.
++    ## quic is off: the helper rewrites a wildcard bind to loopback for quic.
++    var commits: seq[seq[MultiAddress]]
++    let node = newTestWakuNode(
++      generateSecp256k1Key(), parseIpAddress("0.0.0.0"), Port(0), quicEnabled = false
++    )
++    node.switch.peerInfo.addObserver(
++      proc(p: PeerInfo) {.gcsafe, raises: [].} =
++        commits.add(p.addrs)
++    )
++    await node.start()
++    check:
++      commits.anyIt(it.len > 0) ## an empty announcement is not the fix either
++      commits.allIt(it.allIt("0.0.0.0" notin $it))
++      commits.allIt(it.allIt("/tcp/0" notin $it and "/udp/0/" notin $it))
++    await node.stop()
++
++  asyncTest "the peer record hands out nothing un-dialable before start":
++    ## Rendezvous mounts before start and signs this record. On a wildcard
++    ## bind the configured set is still /ip4/0.0.0.0/tcp/0 at that point.
++    let node = newTestWakuNode(
++      generateSecp256k1Key(), parseIpAddress("0.0.0.0"), Port(0), quicEnabled = false
++    )
++    ## The configured set stays untouched: mountMix reads it before start.
++    check:
++      node.announcedAddresses.anyIt("/ip4/0.0.0.0/tcp/0" == $it)
++      node.getWakuPeerRecordGetter()().addresses.len == 0
++    await node.start()
++    let published = node.getWakuPeerRecordGetter()().addresses
++    check:
++      published.len > 0
++      published.allIt("0.0.0.0" notin $it)
++      published.allIt("/tcp/0" notin $it and "/udp/0/" notin $it)
++    await node.stop()
++
+   asyncTest "a loopback bind stays loopback in the base":
+     ## Rewriting loopback to the LAN IP once crashed the test suite
+     ## because it announces endpoints nothing listens on.
+diff --git a/tests/test_delivery_dialer.nim b/tests/test_delivery_dialer.nim
+new file mode 100644
+index 000000000000..32e7d08a70ae
+--- /dev/null
++++ b/tests/test_delivery_dialer.nim
+@@ -0,0 +1,53 @@
++{.used.}
++
++## The dial side of logos-workspace#209. DeliveryDialer replaces the switch
++## dialer, so every dial in the process passes through it -- which makes it the
++## one place that can refuse an address no connect() could ever have completed.
++
++import std/strutils
++import testutils/unittests, chronos
++import libp2p/[multiaddress, switch]
++import libp2p/protocols/connectivity/relay/relay
++import logos_delivery/waku/node/[waku_switch, delivery_dialer]
++import ./testlib/[common, wakucore]
++
++proc ma(s: string): MultiAddress =
++  MultiAddress.init(s).get()
++
++suite "Delivery dialer":
++  asyncTest "a dial whose every address is un-dialable never reaches a transport":
++    ## The 866 `Dialing failed` lines on the device were 364 of these plus the
++    ## peers behind them: /ip4/0.0.0.0/... and /tcp/0 are listen arguments that
++    ## leaked into somebody's peer record, and each one cost a full connect().
++    let sw = newWakuSwitch(rng = rng(), circuitRelay = Relay.new())
++    await sw.start()
++    let target = newTestSwitch().peerInfo.peerId
++
++    var raised = ""
++    try:
++      await sw.connect(
++        target, @[ma("/ip4/0.0.0.0/tcp/53024"), ma("/ip4/127.0.0.1/tcp/0")]
++      )
++    except DialFailedError as e:
++      raised = e.msg
++
++    check:
++      "no dialable address" in raised
++      "wildcard bind address" in raised ## every drop is named once
++      "port 0" in raised
++    await sw.stop()
++
++  asyncTest "a usable address beside an un-dialable one still connects":
++    ## The screen must not eat the dial. Same shape a rendezvous record has
++    ## when the publisher announced both its wildcard bind and a real endpoint.
++    let
++      dialer = newWakuSwitch(rng = rng(), circuitRelay = Relay.new())
++      dest = newWakuSwitch(rng = rng(), circuitRelay = Relay.new())
++    await allFutures(dialer.start(), dest.start())
++
++    await dialer.connect(
++      dest.peerInfo.peerId, @[ma("/ip4/0.0.0.0/tcp/1")] & dest.peerInfo.addrs
++    )
++    check dialer.isConnected(dest.peerInfo.peerId)
++
++    await allFutures(dialer.stop(), dest.stop())
+diff --git a/tests/test_dialable.nim b/tests/test_dialable.nim
+new file mode 100644
+index 000000000000..ce99b4ef00d6
+--- /dev/null
++++ b/tests/test_dialable.nim
+@@ -0,0 +1,85 @@
++{.used.}
++
++## The admission rules for an address that crosses the network.
++## Cases transferred from logos-libp2p-module's addr_filter unit suite
++## (logos-workspace#206), minus its platform-conditional Loopback verdict.
++
++import std/sequtils
++import testutils/unittests
++import libp2p/multiaddress
++import ../logos_delivery/waku/net/dialable
++
++proc ma(s: string): MultiAddress =
++  MultiAddress.init(s).get()
++
++suite "Dialable addresses":
++  test "a bound LAN endpoint is usable":
++    check:
++      ma("/ip4/192.168.1.173/tcp/53024").classify() == Usable
++      ma("/ip4/203.0.113.7/udp/60000/quic-v1").classify() == Usable
++      ma("/ip6/2001:db8::1/tcp/4001").classify() == Usable
++
++  test "loopback is usable -- it reaches this host":
++    ## The publish-side question about loopback is deliberately not asked here.
++    check:
++      ma("/ip4/127.0.0.1/tcp/53022").classify() == Usable
++      ma("/ip6/::1/tcp/4001").classify() == Usable
++
++  test "the wildcard bind host is not usable":
++    check:
++      ma("/ip4/0.0.0.0/tcp/53024").classify() == Wildcard
++      ma("/ip6/::/tcp/4001").classify() == Wildcard
++      ma("/ip4/0.0.0.0/udp/60000/quic-v1").classify() == Wildcard
++
++  test "port 0 is not usable, and outranks the wildcard host":
++    check:
++      ma("/ip4/192.168.1.173/tcp/0").classify() == ZeroPort
++      ma("/ip4/127.0.0.1/tcp/0").classify() == ZeroPort
++      ma("/ip4/0.0.0.0/tcp/0").classify() == ZeroPort
++      ma("/ip4/0.0.0.0/udp/0/quic-v1").classify() == ZeroPort
++
++  test "a host whose text merely contains the wildcard is untouched":
++    ## 10.0.0.0 reads as "0.0.0.0" to a string match. Reading the parsed
++    ## bytes keeps it.
++    check:
++      ma("/ip4/10.0.0.0/tcp/60123").classify() == Usable
++      ma("/ip4/1.0.0.0/tcp/60123").classify() == Usable
++
++  test "::1 does not collapse into the unspecified address":
++    check ma("/ip6/::1/tcp/4001").hasWildcardHost() == false
++
++  test "a shape with no IP or port to judge is left alone":
++    ## Only positively recognised faults are reported: a circuit route or a
++    ## dns endpoint comes back Usable and is left to the transport.
++    check:
++      ma("/dns4/node.example.org/tcp/443/wss").classify() == Usable
++      ma(
++        "/ip4/93.184.216.34/tcp/4001/p2p/" &
++        "16Uiu2HAm7YEh2wwbYNvayrSQe2bdm1aL4FnhCLkvSNaScMxcgt4n/p2p-circuit"
++      ).classify() == Usable
++
++  test "filtering keeps order and names every drop once":
++    let addrs = @[
++      ma("/ip4/0.0.0.0/tcp/53024"),
++      ma("/ip4/192.168.1.173/tcp/53024"),
++      ma("/ip4/127.0.0.1/tcp/0"),
++      ma("/ip4/127.0.0.1/tcp/53022"),
++    ]
++    let kept = usableAddrs(addrs)
++    check:
++      kept == @[ma("/ip4/192.168.1.173/tcp/53024"), ma("/ip4/127.0.0.1/tcp/53022")]
++      describeUnusable(addrs) ==
++        "/ip4/0.0.0.0/tcp/53024 (wildcard bind address), " &
++        "/ip4/127.0.0.1/tcp/0 (port 0)"
++
++  test "an all-usable set is reported as dropping nothing":
++    let addrs = @[ma("/ip4/192.168.1.173/tcp/53024")]
++    check:
++      usableAddrs(addrs) == addrs
++      describeUnusable(addrs) == ""
++
++  test "an empty set survives both halves":
++    var empty: seq[MultiAddress]
++    check:
++      usableAddrs(empty).len == 0
++      describeUnusable(empty) == ""
