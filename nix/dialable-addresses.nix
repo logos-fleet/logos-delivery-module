@@ -45,17 +45,20 @@
 # proc between modules, which `substituteInPlace` cannot express. patch(1)
 # fails the build if any hunk no longer applies, which is the same loud-on-drift
 # bargain `--replace-fail` makes in nix/hermetic-delivery.nix.
-{ delivery, patches }:
+{ delivery, deliveryPatches }:
 
 let
   # Only the nim library is patched. `rln` is Rust, built from the vendored
   # zerokit submodule, and has none of these files; `default` is the same
   # derivation as `liblogosdelivery` under another name and is kept in step so
-  # the two cannot drift into two different builds.
+  # the two cannot drift into two different builds. The apps logos-delivery
+  # also builds are left alone for the same reason nix/no-nim-signal-handler.nix
+  # leaves them: nothing here consumes them -- delivery_module links the
+  # library -- so patching them would only cost build time.
   screened = ps:
     let
       lib' = ps.liblogosdelivery.overrideAttrs (old: {
-        patches = (old.patches or [ ]) ++ patches;
+        patches = (old.patches or [ ]) ++ deliveryPatches;
       });
     in
     ps // { liblogosdelivery = lib'; default = lib'; };

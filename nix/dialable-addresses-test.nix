@@ -43,6 +43,7 @@ let
     "tests/test_delivery_dialer.nim"
     "tests/test_announced_addresses.nim"
   ];
+  suiteList = builtins.concatStringsSep " " suites;
 in
 pkgs.stdenv.mkDerivation {
   pname = "liblogosdelivery-dialable-addresses-test";
@@ -72,7 +73,7 @@ pkgs.stdenv.mkDerivation {
     make -C $NAT_TRAV/vendor/libnatpmp-upstream \
       CFLAGS="-Wall -Os -fPIC -DENABLE_STRNATPMPERR -DNATPMP_MAX_RETRIES=4" libnatpmp.a
 
-    for suite in ${builtins.concatStringsSep " " suites}; do
+    for suite in ${suiteList}; do
       echo "== compiling $suite"
       nim c \
         --noNimblePath \
@@ -96,13 +97,16 @@ pkgs.stdenv.mkDerivation {
     runHook postBuild
   '';
 
-  # unittest2 exits non-zero on any failed case, so `set -e` is the assertion.
-  # The transcript is kept in $out so a reviewer can read what ran without
-  # rebuilding: a passing Nim test prints its summary and nothing else.
+  # unittest2 exits non-zero on any failed case and stdenv runs the phase under
+  # `set -e`, so that exit status is the assertion. Read out of `PIPESTATUS`
+  # because the transcript goes through `tee`, whose own status would otherwise
+  # be the one `set -e` sees. The transcript is kept in $out so a reviewer can
+  # read what ran without rebuilding: a passing Nim test prints its summary and
+  # nothing else.
   installPhase = ''
     runHook preInstall
     mkdir -p $out
-    for suite in ${builtins.concatStringsSep " " suites}; do
+    for suite in ${suiteList}; do
       name=$(basename $suite .nim)
       echo "== running $name"
       ./build/$name 2>&1 | tee -a $out/result

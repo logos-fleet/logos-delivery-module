@@ -136,7 +136,7 @@ index a0139ef12962..0329bd3b8429 100644
    let
      isWs = ma.contains(multiCodec("ws")).get()
 diff --git a/logos_delivery/waku/node/delivery_dialer.nim b/logos_delivery/waku/node/delivery_dialer.nim
-index 5d34a33c5f74..93a1c6ecf59f 100644
+index 5d34a33c5f74..73d204cd767b 100644
 --- a/logos_delivery/waku/node/delivery_dialer.nim
 +++ b/logos_delivery/waku/node/delivery_dialer.nim
 @@ -1,7 +1,7 @@
@@ -170,7 +170,7 @@ index 5d34a33c5f74..93a1c6ecf59f 100644
  
  proc install*(T: typedesc[DeliveryDialer], switch: Switch) =
    switch.dialer = DeliveryDialer.new(
-@@ -26,6 +31,30 @@ proc install*(T: typedesc[DeliveryDialer], switch: Switch) =
+@@ -26,6 +31,40 @@ proc install*(T: typedesc[DeliveryDialer], switch: Switch) =
      switch.ms, switch.nameResolver,
    )
  
@@ -198,19 +198,25 @@ index 5d34a33c5f74..93a1c6ecf59f 100644
 +    "no dialable address for " & peer & ": " & describeUnusable(addrs),
 +  )
 +
++proc admitOrRefuse(
++    peerId: PeerId, addrs: seq[MultiAddress]
++): seq[MultiAddress] {.raises: [DialFailedError].} =
++  ## `admit`, for the three methods whose answer to "nothing survived" is to
++  ## refuse the dial. `dialAndUpgrade` is the one that answers nil instead and
++  ## screens inline.
++  result = admit(addrs)
++  if noneLeft(addrs, result):
++    raise refuse($peerId, addrs)
++
  method connect*(
      self: DeliveryDialer,
      peerId: PeerId,
-@@ -34,10 +63,21 @@ method connect*(
-     reuseConnection = true,
+@@ -35,9 +74,17 @@ method connect*(
      dir = Direction.Out,
  ) {.async: (raises: [DialFailedError, CancelledError]).} =
-+  let admitted = admit(addrs)
-+  if noneLeft(addrs, admitted):
-+    raise refuse($peerId, addrs)
    await procCall Dialer(self).connect(
 -    peerId, sortQuicFirst(addrs), forceDial, reuseConnection, dir
-+    peerId, admitted, forceDial, reuseConnection, dir
++    peerId, admitOrRefuse(peerId, addrs), forceDial, reuseConnection, dir
    )
  
 +method connect*(
@@ -224,19 +230,18 @@ index 5d34a33c5f74..93a1c6ecf59f 100644
  method dial*(
      self: DeliveryDialer,
      peerId: PeerId,
-@@ -45,7 +85,10 @@ method dial*(
+@@ -45,7 +92,9 @@ method dial*(
      protos: seq[string],
      forceDial = false,
  ): Future[Stream] {.async: (raises: [DialFailedError, CancelledError]).} =
 -  await procCall Dialer(self).dial(peerId, sortQuicFirst(addrs), protos, forceDial)
-+  let admitted = admit(addrs)
-+  if noneLeft(addrs, admitted):
-+    raise refuse($peerId, addrs)
-+  await procCall Dialer(self).dial(peerId, admitted, protos, forceDial)
++  await procCall Dialer(self).dial(
++    peerId, admitOrRefuse(peerId, addrs), protos, forceDial
++  )
  
  method dialAndUpgrade*(
      self: DeliveryDialer,
-@@ -55,9 +98,18 @@ method dialAndUpgrade*(
+@@ -55,9 +104,15 @@ method dialAndUpgrade*(
  ): Future[Muxer] {.
      async: (raises: [CancelledError, MaError, TransportAddressError, LPError])
  .} =
@@ -253,12 +258,9 @@ index 5d34a33c5f74..93a1c6ecf59f 100644
      self: DeliveryDialer, peerId: PeerId, addrs: seq[MultiAddress]
  ): Future[Opt[MultiAddress]] {.async: (raises: [DialFailedError, CancelledError]).} =
 -  await procCall Dialer(self).tryDial(peerId, sortQuicFirst(addrs))
-+  let admitted = admit(addrs)
-+  if noneLeft(addrs, admitted):
-+    raise refuse($peerId, addrs)
-+  await procCall Dialer(self).tryDial(peerId, admitted)
++  await procCall Dialer(self).tryDial(peerId, admitOrRefuse(peerId, addrs))
 diff --git a/logos_delivery/waku/node/waku_node.nim b/logos_delivery/waku/node/waku_node.nim
-index 31b19e12c505..4799c0287d51 100644
+index 31b19e12c505..71a135189ba4 100644
 --- a/logos_delivery/waku/node/waku_node.nim
 +++ b/logos_delivery/waku/node/waku_node.nim
 @@ -207,17 +207,63 @@ proc getCapabilitiesGetter(node: WakuNode): GetCapabilities =
@@ -284,7 +286,7 @@ index 31b19e12c505..4799c0287d51 100644
        mixKey = mixKey,
      )
  
-+proc resolveAddresses*(
++proc resolveAddresses(
 +    addrs: seq[MultiAddress], listenAddrs: seq[MultiAddress]
 +): seq[MultiAddress] =
 +  ## Turn configured addresses into ones a reader can dial: port 0 becomes the

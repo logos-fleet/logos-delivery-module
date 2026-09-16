@@ -66,7 +66,7 @@
       # Everything after it is `overrideAttrs` and composes in any order.
       screenedDelivery = import ./nix/dialable-addresses.nix {
         delivery = hermeticDelivery;
-        patches = deliveryPatches;
+        inherit deliveryPatches;
       };
 
       # ...and then built without Nim's own signal handler, which a library
