@@ -32,6 +32,12 @@
 
   outputs = inputs@{ logos-module-builder, ... }:
     let
+      # The one diff carried against logos-delivery, named once and handed to
+      # every leg that compiles its nim: the desktop package set below, the
+      # mobile cross build, and the check that runs the tests it adds. See
+      # nix/dialable-addresses.nix.
+      deliveryPatches = [ ./nix/patches/dialable-addresses.patch ];
+
       # The mobile half of both externalLibInputs below. nim-delivery's and
       # zerokit's own flakes answer for desktop systems only, and
       # logos-module-builder cannot recompile an external library for a phone
@@ -44,6 +50,7 @@
         inherit (logos-module-builder.inputs) rust-overlay;
         inherit (logos-module-builder.lib.common) mkPkgsWith;
         deliverySrc = inputs.logos-delivery;
+        inherit deliveryPatches;
         # Which cargo triple each mobile pseudo-system is, read off the builder
         # rather than restated: a list copied into this flake would go stale
         # silently. `or { }` because a builder predating the mobile targets has
@@ -60,15 +67,24 @@
         delivery = inputs.logos-delivery;
       };
 
+      # ...then with the addresses it publishes and dials screened, so it stops
+      # announcing its own wildcard bind address and stops dialling everyone
+      # else's. See nix/dialable-addresses.nix and logos-workspace#209.
+      #
+      # Hermetic FIRST: it calls `.override`, which re-evaluates the package
+      # from its arguments and would drop an `overrideAttrs` applied before it.
+      # Everything after it is `overrideAttrs` and composes in any order.
+      screenedDelivery = import ./nix/dialable-addresses.nix {
+        delivery = hermeticDelivery;
+        inherit deliveryPatches;
+      };
+
       # ...and then built without Nim's own signal handler, which a library
       # loaded into someone else's process has no business owning and which
       # could never report a fault anyway. See nix/no-nim-signal-handler.nix
       # and logos-workspace#150.
-      #
-      # Hermetic FIRST: it calls `.override`, which re-evaluates the package
-      # from its arguments and would drop an `overrideAttrs` applied before it.
       deliveryPackages = import ./nix/no-nim-signal-handler.nix {
-        delivery = hermeticDelivery;
+        delivery = screenedDelivery;
       };
 
       module = logos-module-builder.lib.mkLogosModule {
@@ -180,6 +196,14 @@
           no-nim-signal-handler = import ./nix/no-nim-signal-handler-test.nix {
             pkgs = nixpkgs.legacyPackages.${system};
             liblogosdelivery = deliveryPackages.packages.${system}.liblogosdelivery;
+          };
+          # logos-delivery's nix build runs no tests, so the cases the patch
+          # adds need a check of their own to mean anything.
+          dialable-addresses = import ./nix/dialable-addresses-test.nix {
+            pkgs = nixpkgs.legacyPackages.${system};
+            deliverySrc = inputs.logos-delivery;
+            inherit deliveryPatches;
+            rln = deliveryPackages.packages.${system}.rln;
           };
         });
     };
