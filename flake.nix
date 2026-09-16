@@ -15,7 +15,16 @@
     # that line has them yet. A builder without them simply publishes no mobile
     # keys in `packages`, so pointing this back at logos-co degrades the flake
     # rather than breaking it.
-    logos-module-builder.url = "github:logos-fleet/logos-module-builder/8eba493";
+    #
+    # ...and since metadata.json declares `"platform": true` (ADR 0009), the rev
+    # also has to be one that KNOWS that key. An older builder's near-miss guard
+    # for `platforms` overlays THROWS on it -- "rename it to `platforms`
+    # (plural)", which names the wrong fix for a key spelled correctly -- and a
+    # throw at parse time takes every output of this flake with it. The
+    # workspace's `follows` hid that for as long as nobody evaluated this repo on
+    # its OWN lock; `ws test logos-delivery-module` and a bare `nix build` here
+    # both do. logos-workspace#214.
+    logos-module-builder.url = "github:logos-fleet/logos-module-builder/738f1a6ef5a6f755f8433297ac0d2ef54bba8d2f";
     nix-bundle-lgx.url = "github:logos-co/nix-bundle-lgx";
     logos-delivery.url = "git+https://github.com/logos-messaging/logos-delivery?submodules=1";
   };
