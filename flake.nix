@@ -9,18 +9,19 @@
   };
 
   inputs = {
-    # A rev on the logos-fleet fork, not logos-co: the mobile Bare outputs this
-    # flake exposes -- and the `externalLibInputs.<name>.mobilePackages` contract
-    # the two entries below answer -- are a property of the BUILDER, and only
-    # that line has them yet. A builder without them simply publishes no mobile
-    # keys in `packages`, so pointing this back at logos-co degrades the flake
-    # rather than breaking it.
+    # A rev on the logos-fleet fork, not logos-co, for two reasons.
     #
-    # ...and since metadata.json declares `"platform": true` (ADR 0009), the rev
-    # also has to be one that KNOWS that key. An older builder's near-miss guard
-    # for `platforms` overlays THROWS on it -- "rename it to `platforms`
-    # (plural)", which names the wrong fix for a key spelled correctly -- and a
-    # throw at parse time takes every output of this flake with it. The
+    # The mobile Bare outputs this flake exposes -- and the
+    # `externalLibInputs.<name>.mobilePackages` contract the two entries below
+    # answer -- are a property of the BUILDER, and only that line has them yet.
+    # A builder without them publishes no mobile keys in `packages` at all.
+    #
+    # And metadata.json declares `"platform": true` (ADR 0009), a key the rev
+    # also has to KNOW. An older builder's near-miss guard for `platforms`
+    # overlays THROWS on it -- "rename it to `platforms` (plural)", which names
+    # the wrong fix for a key spelled correctly -- and a throw at parse time
+    # takes every output of this flake with it. So pointing this back at
+    # logos-co does not merely degrade the flake, it stops it evaluating. The
     # workspace's `follows` hid that for as long as nobody evaluated this repo on
     # its OWN lock; `ws test logos-delivery-module` and a bare `nix build` here
     # both do. logos-workspace#214.
